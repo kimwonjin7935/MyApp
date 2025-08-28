@@ -1,0 +1,365 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=360,height=360,initial-scale=1.0,maximum-scale=1.0,user-scalable=no">
+  <title>SimpleCaddie v1.5</title>
+  <style>
+    body {
+      margin: 0;
+      padding: 0;
+      background: #000;
+      color: #fff;
+      font-family: 'Arial Black', sans-serif;
+      width: 360px;
+      height: 360px;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      overflow: hidden;
+    }
+
+    .container {
+      width: 100%;
+      height: 100%;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+    }
+
+    /* 메인 3분할 영역 */
+    .main_position {
+      display: flex;
+      width: 100%;
+      height: 70%;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .main_position > div {
+      flex: 1;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+    }
+
+    /* 왼쪽: Hole/Par */
+    .par-info {
+      flex-direction: column;
+      font-size: 60px;
+      font-weight: 900;
+      color: #00ff00;
+      line-height: 0.9;
+    }
+
+    /* 가운데: 거리 */
+    .distances {
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .distance {
+      font-size: 80px;
+      font-weight: 900;
+      text-align: center;
+      line-height: 0.9;
+      letter-spacing: -3px;
+    }
+
+    .back-pin { color: #fffd6b; }
+    .middle-pin { color: #ffffff; }
+    .front-pin { color: #f30505; }
+
+    /* 오른쪽: 새로고침 버튼 */
+    .refresh-area {
+      display: flex;
+      justify-content: center;
+      align-items: center;
+    }
+
+    .refresh-btn {
+      width: 100%;
+      height: 100%;
+      font-size: 60px;
+      background: #00ff00;
+      color: #000;
+      border: none;
+      border-radius: 20px;
+      cursor: pointer;
+    }
+
+    .refresh-btn:hover {
+      background: #00cc00;
+    }
+
+    /* 코스 정보 */
+    .course-info {
+      font-size: 20px;
+      margin-top: 5px;
+      color: #888;
+      text-align: center;
+    }
+
+    /* 상태 표시 */
+    .status {
+      position: absolute;
+      top: 5px;
+      left: 50%;
+      transform: translateX(-50%);
+      font-size: 14px;
+      color: #888;
+    }
+
+    /* 로딩 */
+    .loading {
+      font-size: 20px;
+      color: #00ff00;
+      animation: pulse 1.5s infinite;
+      text-align: center;
+    }
+
+    @keyframes pulse {
+      0% { opacity: 0.5; }
+      50% { opacity: 1; }
+      100% { opacity: 0.5; }
+    }
+
+    .error {
+      color: #ff6b6b;
+      font-size: 18px;
+      text-align: center;
+      padding: 20px;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="status" id="status">GPS 위치 확인 중...</div>
+
+    <div id="loading" class="loading">
+      위치 정보를 가져오는 중...
+    </div>
+
+    <div class="main_position" id="main-content" style="display:none;">
+      <div class="par-info" id="hole-par-info">
+        <div id="hole-num">H1</div>
+        <div id="par-num">P4</div>
+      </div>
+
+      <div class="distances">
+        <div class="distance back-pin" id="back-distance">---</div>
+        <div class="distance middle-pin" id="middle-distance">---</div>
+        <div class="distance front-pin" id="front-distance">---</div>
+      </div>
+
+      <div class="refresh-area">
+        <button class="refresh-btn" id="refresh-btn">🔄</button>
+      </div>
+    </div>
+
+    <div class="course-info" id="course-info">
+      샤인코스 - 샤인데일CC
+    </div>
+
+    <div id="error-content" style="display: none;">
+      <div class="error" id="error-message"></div>
+      <button class="refresh-btn" id="error-refresh-btn">다시 시도</button>
+    </div>
+  </div>
+
+  <script>
+    let currentPosition = null;
+    let watchId = null;
+
+    /* ✅ 골프장 위치 정보 */
+    const golfCourses = {
+        "SHINE": {
+            name: "샤인 코스",
+            holes: [
+                { hole: 1, par: 4, green: { lat: 37.69085, lng: 127.89311 }},
+                { hole: 2, par: 4, green: { lat: 37.69062, lng: 127.89667 }},
+                { hole: 3, par: 3, green: { lat: 37.69024, lng: 127.90025 }},
+                { hole: 4, par: 5, green: { lat: 37.68961, lng: 127.90327 }},
+                { hole: 5, par: 4, green: { lat: 37.68750, lng: 127.90150 }},
+                { hole: 6, par: 3, green: { lat: 37.68652, lng: 127.89882 }},
+                { hole: 7, par: 4, green: { lat: 37.68525, lng: 127.89700 }},
+                { hole: 8, par: 5, green: { lat: 37.68538, lng: 127.89345 }},
+                { hole: 9, par: 4, green: { lat: 37.68725, lng: 127.89190 }}
+            ]
+        },
+        "DALE": {
+            name: "데일 코스",
+            holes: [
+                { hole: 1, par: 4, green: { lat: 37.68001, lng: 127.90185 }},
+                { hole: 2, par: 5, green: { lat: 37.67750, lng: 127.90000 }},
+                { hole: 3, par: 3, green: { lat: 37.67633, lng: 127.90220 }},
+                { hole: 4, par: 4, green: { lat: 37.67568, lng: 127.90485 }},
+                { hole: 5, par: 4, green: { lat: 37.67410, lng: 127.90230 }},
+                { hole: 6, par: 3, green: { lat: 37.67280, lng: 127.89975 }},
+                { hole: 7, par: 5, green: { lat: 37.67380, lng: 127.89700 }},
+                { hole: 8, par: 4, green: { lat: 37.67560, lng: 127.89500 }},
+                { hole: 9, par: 4, green: { lat: 37.67800, lng: 127.89700 }}
+            ]
+        },
+        "LAKE": {
+            name: "레이크 코스",
+            holes: [
+                { hole: 1, par: 4, green: { lat: 37.68050, lng: 127.89320 }},
+                { hole: 2, par: 5, green: { lat: 37.68230, lng: 127.89110 }},
+                { hole: 3, par: 3, green: { lat: 37.68300, lng: 127.88850 }},
+                { hole: 4, par: 4, green: { lat: 37.68150, lng: 127.88600 }},
+                { hole: 5, par: 4, green: { lat: 37.68000, lng: 127.88450 }},
+                { hole: 6, par: 3, green: { lat: 37.67800, lng: 127.88600 }},
+                { hole: 7, par: 5, green: { lat: 37.67700, lng: 127.88850 }},
+                { hole: 8, par: 4, green: { lat: 37.67850, lng: 127.89100 }},
+                { hole: 9, par: 4, green: { lat: 37.67950, lng: 127.89350 }}
+            ]
+        }
+    };
+
+    function calcDistance(lat1, lon1, lat2, lon2) {
+      function toRad(v) { return v * Math.PI / 180; }
+      const R = 6371000;
+      const dLat = toRad(lat2 - lat1);
+      const dLon = toRad(lon2 - lon1);
+      const a = Math.sin(dLat/2)**2 +
+                Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) *
+                Math.sin(dLon/2)**2;
+      return Math.round(R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a)));
+    }
+
+    function findNearestHole(position) {
+        let nearestHole = null;
+        let minDistance = Infinity;
+        
+        for (const [courseCode, course] of Object.entries(golfCourses)) {
+            for (const hole of course.holes) {
+                const distance = calcDistance(
+                    position.lat, position.lng,
+                    hole.green.lat, hole.green.lng
+                );
+                
+                if (distance < minDistance) { // 800m 제한 없이 가장 가까운 홀을 찾음
+                    minDistance = distance;
+                    nearestHole = { ...hole, courseName: course.name, courseCode, distance };
+                }
+            }
+        }
+        
+        return nearestHole;
+    }
+
+    function updateDistances(position) {
+      const nearestHole = findNearestHole(position);
+      
+      if (nearestHole) {
+        const actualDistance = calcDistance(
+            position.lat, position.lng,
+            nearestHole.green.lat, nearestHole.green.lng
+        );
+
+        const backDist = Math.round(actualDistance + 15);
+        const midDist = Math.round(actualDistance);
+        const frontDist = Math.round(actualDistance - 15);
+        
+        document.getElementById('hole-num').textContent = `H${nearestHole.hole}`;
+        document.getElementById('par-num').textContent = `P${nearestHole.par}`;
+        document.getElementById('course-info').textContent = `${nearestHole.courseName} - 샤인데일CC`;
+        document.getElementById('back-distance').textContent = backDist;
+        document.getElementById('middle-distance').textContent = midDist;
+        document.getElementById('front-distance').textContent = frontDist;
+        
+        showMainContent();
+      } else {
+        showError('근처에 골프장이 없습니다.');
+      }
+    }
+
+    function showLoading() {
+      document.getElementById('loading').style.display = 'block';
+      document.getElementById('main-content').style.display = 'none';
+      document.getElementById('error-content').style.display = 'none';
+    }
+
+    function showMainContent() {
+      document.getElementById('loading').style.display = 'none';
+      document.getElementById('error-content').style.display = 'none';
+      document.getElementById('main-content').style.display = 'flex';
+    }
+
+    function showError(message) {
+      document.getElementById('loading').style.display = 'none';
+      document.getElementById('main-content').style.display = 'none';
+      document.getElementById('error-content').style.display = 'flex';
+      document.getElementById('error-message').textContent = message;
+    }
+
+    function getCurrentPosition() {
+        showLoading();
+        document.getElementById('status').textContent = 'GPS 위치 확인 중...';
+        
+        if (navigator.geolocation) {
+            const options = {
+                enableHighAccuracy: true,
+                timeout: 10000,
+                maximumAge: 30000
+            };
+            
+            watchId = navigator.geolocation.watchPosition(
+                (position) => {
+                    currentPosition = {
+                        lat: position.coords.latitude,
+                        lng: position.coords.longitude,
+                        accuracy: position.coords.accuracy
+                    };
+                    document.getElementById('status').textContent = 
+                        `GPS 정확도: ${Math.round(currentPosition.accuracy)}m`;
+                    updateDistances(currentPosition);
+                },
+                (error) => {
+                    let errorMsg = 'GPS 오류: ';
+                    switch (error.code) {
+                        case error.PERMISSION_DENIED:
+                            errorMsg += '위치 권한이 거부되었습니다.';
+                            break;
+                        case error.POSITION_UNAVAILABLE:
+                            errorMsg += '위치 정보를 사용할 수 없습니다.';
+                            break;
+                        case error.TIMEOUT:
+                            errorMsg += '위치 요청 시간이 초과되었습니다.';
+                            break;
+                        default:
+                            errorMsg += '알 수 없는 오류가 발생했습니다.';
+                    }
+                    showError(errorMsg);
+                },
+                options
+            );
+        } else {
+            showError('이 기기는 GPS를 지원하지 않습니다.');
+        }
+    }
+
+    document.getElementById('refresh-btn').addEventListener('click', () => {
+      getCurrentPosition();
+    });
+
+    document.getElementById('error-refresh-btn').addEventListener('click', () => {
+      getCurrentPosition();
+    });
+
+    document.addEventListener('DOMContentLoaded', () => {
+        getCurrentPosition();
+    });
+
+    window.addEventListener('beforeunload', () => {
+        if (watchId) {
+            navigator.geolocation.clearWatch(watchId);
+        }
+    });
+  </script>
+</body>
+</html>
