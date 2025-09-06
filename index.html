@@ -1,365 +1,458 @@
 <!DOCTYPE html>
 <html lang="ko">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=360,height=360,initial-scale=1.0,maximum-scale=1.0,user-scalable=no">
-  <title>SimpleCaddie v1.5</title>
-  <style>
-    body {
-      margin: 0;
-      padding: 0;
-      background: #000;
-      color: #fff;
-      font-family: 'Arial Black', sans-serif;
-      width: 360px;
-      height: 360px;
-      display: flex;
-      flex-direction: column;
-      justify-content: center;
-      align-items: center;
-      overflow: hidden;
-    }
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>whereIsMyCar (웹버전)</title>
+<style>
+  body, html {
+    margin:0; padding:0; height:100vh; overflow:hidden;
+    display:flex; flex-direction: column;
+    font-family: Arial, sans-serif;
+  }
+  #buttons {
+    padding: 10px;
+    background: #333;
+    display: flex;
+    gap: 10px;
+  }
+  button {
+    flex: 1;
+    padding: 10px;
+    color: white;
+    background: #007bff;
+    border: none;
+    border-radius: 4px;
+    font-size: 16px;
+  }
+  button:hover { background: #0056b3; }
 
-    .container {
-      width: 100%;
-      height: 100%;
-      display: flex;
-      flex-direction: column;
-      justify-content: center;
-    }
+  /* 스크롤 영역 */
+  #container {
+    position: relative;
+    flex-grow: 1;
+    background-color: #ccc;
+    overflow: auto;            /* 확대 후 스크롤 */
+    touch-action: none;        /* 커스텀 핀치 제스처 처리 */
+  }
 
-    /* 메인 3분할 영역 */
-    .main_position {
-      display: flex;
-      width: 100%;
-      height: 70%;
-      justify-content: space-between;
-      align-items: center;
-    }
+  /* 확대/축소 대상(배경+전경을 모두 포함하는 래퍼) */
+  #stage {
+    position: relative;
+    width: 100%;              /* 초기 크기 = 컨테이너 크기 */
+    height: 100%;
+    transform-origin: 0 0;    /* 좌상단 기준 스케일 */
+    will-change: transform;
+  }
 
-    .main_position > div {
-      flex: 1;
-      display: flex;
-      justify-content: center;
-      align-items: center;
-    }
+  /* 배경/전경은 stage 내부로 이동 */
+  #background {
+    position: absolute;
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    user-select: none;
+    pointer-events: none;     /* 배경은 포인터 통과 */
+  }
+  #foreground {
+    position: absolute;
+    width: 150px;
+    height: 150px;
+    cursor: grab;
+    user-select: none;
+    display: none;
+    touch-action: none;
+  }
+  #fg-resize-handle {
+    position: absolute;
+    width: 15px;
+    height: 15px;
+    background: rgba(0,0,0,0.5);
+    right: 0; bottom: 0;
+    cursor: se-resize;
+    display: none;
+  }
 
-    /* 왼쪽: Hole/Par */
-    .par-info {
-      flex-direction: column;
-      font-size: 60px;
-      font-weight: 900;
-      color: #00ff00;
-      line-height: 0.9;
-    }
-
-    /* 가운데: 거리 */
-    .distances {
-      flex-direction: column;
-      justify-content: center;
-      align-items: center;
-      gap: 10px;
-    }
-
-    .distance {
-      font-size: 80px;
-      font-weight: 900;
-      text-align: center;
-      line-height: 0.9;
-      letter-spacing: -3px;
-    }
-
-    .back-pin { color: #fffd6b; }
-    .middle-pin { color: #ffffff; }
-    .front-pin { color: #f30505; }
-
-    /* 오른쪽: 새로고침 버튼 */
-    .refresh-area {
-      display: flex;
-      justify-content: center;
-      align-items: center;
-    }
-
-    .refresh-btn {
-      width: 100%;
-      height: 100%;
-      font-size: 60px;
-      background: #00ff00;
-      color: #000;
-      border: none;
-      border-radius: 20px;
-      cursor: pointer;
-    }
-
-    .refresh-btn:hover {
-      background: #00cc00;
-    }
-
-    /* 코스 정보 */
-    .course-info {
-      font-size: 20px;
-      margin-top: 5px;
-      color: #888;
-      text-align: center;
-    }
-
-    /* 상태 표시 */
-    .status {
-      position: absolute;
-      top: 5px;
-      left: 50%;
-      transform: translateX(-50%);
-      font-size: 14px;
-      color: #888;
-    }
-
-    /* 로딩 */
-    .loading {
-      font-size: 20px;
-      color: #00ff00;
-      animation: pulse 1.5s infinite;
-      text-align: center;
-    }
-
-    @keyframes pulse {
-      0% { opacity: 0.5; }
-      50% { opacity: 1; }
-      100% { opacity: 0.5; }
-    }
-
-    .error {
-      color: #ff6b6b;
-      font-size: 18px;
-      text-align: center;
-      padding: 20px;
-    }
-  </style>
+  /* 우측 하단에 배율 표시 (옵션) */
+  #zoomHud {
+    position: fixed;
+    right: 10px;
+    bottom: 10px;
+    background: rgba(0,0,0,.55);
+    color: #fff;
+    padding: 6px 10px;
+    border-radius: 6px;
+    font-size: 13px;
+    z-index: 10;
+    pointer-events: none;
+  }
+</style>
 </head>
 <body>
-  <div class="container">
-    <div class="status" id="status">GPS 위치 확인 중...</div>
 
-    <div id="loading" class="loading">
-      위치 정보를 가져오는 중...
-    </div>
+<div id="buttons">
+  <button id="btnBg">배경사진등록및변경</button>
+  <button id="btnFg">전경사진등록및변경</button>
+</div>
 
-    <div class="main_position" id="main-content" style="display:none;">
-      <div class="par-info" id="hole-par-info">
-        <div id="hole-num">H1</div>
-        <div id="par-num">P4</div>
-      </div>
-
-      <div class="distances">
-        <div class="distance back-pin" id="back-distance">---</div>
-        <div class="distance middle-pin" id="middle-distance">---</div>
-        <div class="distance front-pin" id="front-distance">---</div>
-      </div>
-
-      <div class="refresh-area">
-        <button class="refresh-btn" id="refresh-btn">🔄</button>
-      </div>
-    </div>
-
-    <div class="course-info" id="course-info">
-      샤인코스 - 샤인데일CC
-    </div>
-
-    <div id="error-content" style="display: none;">
-      <div class="error" id="error-message"></div>
-      <button class="refresh-btn" id="error-refresh-btn">다시 시도</button>
-    </div>
+<div id="container">
+  <!-- 확대/축소 대상 래퍼 -->
+  <div id="stage">
+    <img id="background" src="" alt="배경이미지" />
+    <img id="foreground" src="" alt="전경이미지" draggable="false" />
+    <div id="fg-resize-handle"></div>
   </div>
+</div>
 
-  <script>
-    let currentPosition = null;
-    let watchId = null;
+<div id="zoomHud" aria-hidden="true">100%</div>
 
-    /* ✅ 골프장 위치 정보 */
-    const golfCourses = {
-        "SHINE": {
-            name: "샤인 코스",
-            holes: [
-                { hole: 1, par: 4, green: { lat: 37.69085, lng: 127.89311 }},
-                { hole: 2, par: 4, green: { lat: 37.69062, lng: 127.89667 }},
-                { hole: 3, par: 3, green: { lat: 37.69024, lng: 127.90025 }},
-                { hole: 4, par: 5, green: { lat: 37.68961, lng: 127.90327 }},
-                { hole: 5, par: 4, green: { lat: 37.68750, lng: 127.90150 }},
-                { hole: 6, par: 3, green: { lat: 37.68652, lng: 127.89882 }},
-                { hole: 7, par: 4, green: { lat: 37.68525, lng: 127.89700 }},
-                { hole: 8, par: 5, green: { lat: 37.68538, lng: 127.89345 }},
-                { hole: 9, par: 4, green: { lat: 37.68725, lng: 127.89190 }}
-            ]
-        },
-        "DALE": {
-            name: "데일 코스",
-            holes: [
-                { hole: 1, par: 4, green: { lat: 37.68001, lng: 127.90185 }},
-                { hole: 2, par: 5, green: { lat: 37.67750, lng: 127.90000 }},
-                { hole: 3, par: 3, green: { lat: 37.67633, lng: 127.90220 }},
-                { hole: 4, par: 4, green: { lat: 37.67568, lng: 127.90485 }},
-                { hole: 5, par: 4, green: { lat: 37.67410, lng: 127.90230 }},
-                { hole: 6, par: 3, green: { lat: 37.67280, lng: 127.89975 }},
-                { hole: 7, par: 5, green: { lat: 37.67380, lng: 127.89700 }},
-                { hole: 8, par: 4, green: { lat: 37.67560, lng: 127.89500 }},
-                { hole: 9, par: 4, green: { lat: 37.67800, lng: 127.89700 }}
-            ]
-        },
-        "LAKE": {
-            name: "레이크 코스",
-            holes: [
-                { hole: 1, par: 4, green: { lat: 37.68050, lng: 127.89320 }},
-                { hole: 2, par: 5, green: { lat: 37.68230, lng: 127.89110 }},
-                { hole: 3, par: 3, green: { lat: 37.68300, lng: 127.88850 }},
-                { hole: 4, par: 4, green: { lat: 37.68150, lng: 127.88600 }},
-                { hole: 5, par: 4, green: { lat: 37.68000, lng: 127.88450 }},
-                { hole: 6, par: 3, green: { lat: 37.67800, lng: 127.88600 }},
-                { hole: 7, par: 5, green: { lat: 37.67700, lng: 127.88850 }},
-                { hole: 8, par: 4, green: { lat: 37.67850, lng: 127.89100 }},
-                { hole: 9, par: 4, green: { lat: 37.67950, lng: 127.89350 }}
-            ]
-        }
+<input type="file" id="inputBg" accept="image/*" style="display:none;" />
+<input type="file" id="inputFg" accept="image/*" style="display:none;" />
+
+<script>
+const btnBg = document.getElementById('btnBg');
+const btnFg = document.getElementById('btnFg');
+const inputBg = document.getElementById('inputBg');
+const inputFg = document.getElementById('inputFg');
+const bg = document.getElementById('background');
+const fg = document.getElementById('foreground');
+const fgHandle = document.getElementById('fg-resize-handle');
+const container = document.getElementById('container');
+const stage = document.getElementById('stage');
+const zoomHud = document.getElementById('zoomHud');
+
+/* ===================== 확대/축소 공통 ===================== */
+let baseWidth = 0;    // stage의 기준 너비
+let baseHeight = 0;   // stage의 기준 높이
+let scale = 1;        // 현재 배율
+const MIN_SCALE = 0.25;
+const MAX_SCALE = 8;
+const SCALE_STEP = 1.1;
+
+function updateStageSize() {
+  // 컨테이너에 맞게 기본 크기를 설정 (배경 로드 전·후, 리사이즈 시 호출)
+  // 배경의 비율을 고려하려면 object-fit: contain 상태에서 컨테이너 크기를 기준으로 두는 게 자연스러움
+  baseWidth  = container.clientWidth;
+  baseHeight = container.clientHeight;
+
+  applyScale(scale, null);
+}
+
+function applyScale(nextScale, anchor /* {clientX, clientY} or null */) {
+  // 스케일 제한
+  nextScale = Math.max(MIN_SCALE, Math.min(MAX_SCALE, nextScale));
+
+  if (anchor) {
+    // 스케일 중심(anchor) 유지: 스크롤 위치 보정
+    const rect = container.getBoundingClientRect();
+    const scrollLeft = container.scrollLeft;
+    const scrollTop  = container.scrollTop;
+    const ax = anchor.clientX - rect.left + scrollLeft;
+    const ay = anchor.clientY - rect.top  + scrollTop;
+
+    const prevScale = scale;
+    scale = nextScale;
+
+    const nx = ax * (scale / prevScale);
+    const ny = ay * (scale / prevScale);
+
+    // stage의 실제 박스 크기도 키워서 스크롤바가 실제로 생기도록 함
+    stage.style.width  = (baseWidth  * scale) + 'px';
+    stage.style.height = (baseHeight * scale) + 'px';
+    stage.style.transform = `scale(${1})`; // transform 대신 실제 크기 변경을 우선
+    // 위에서 width/height로 실제 크기를 바꾸기 때문에 transform은 1로 둡니다.
+    // (transform 스케일만 쓸 경우 스크롤 영역이 변하지 않는 문제가 있음)
+
+    // 앵커를 고정하려면 스크롤을 재계산
+    container.scrollLeft = nx - (anchor.clientX - rect.left);
+    container.scrollTop  = ny - (anchor.clientY - rect.top);
+  } else {
+    scale = nextScale;
+    stage.style.width  = (baseWidth  * scale) + 'px';
+    stage.style.height = (baseHeight * scale) + 'px';
+    stage.style.transform = `scale(${1})`;
+  }
+
+  zoomHud.textContent = Math.round(scale * 100) + '%';
+  localStorage.setItem('zoom-scale', String(scale));
+}
+
+/* 마우스 휠(CTRL+휠 또는 트랙패드 핀치) */
+container.addEventListener('wheel', (e) => {
+  // Ctrl 키가 눌린 경우만 확대/축소 (일반 스크롤은 그대로)
+  if (!e.ctrlKey) return;
+  e.preventDefault();
+
+  const delta = e.deltaY;
+  const factor = delta > 0 ? (1 / SCALE_STEP) : SCALE_STEP;
+  const next = scale * factor;
+  applyScale(next, { clientX: e.clientX, clientY: e.clientY });
+}, { passive: false });
+
+/* 터치 핀치 확대/축소 (PointerEvent 기반) */
+let pointers = new Map();
+let lastPinchDistance = null;
+
+container.addEventListener('pointerdown', (e) => {
+  container.setPointerCapture(e.pointerId);
+  pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+});
+
+container.addEventListener('pointermove', (e) => {
+  if (!pointers.has(e.pointerId)) return;
+  pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+
+  if (pointers.size === 2) {
+    e.preventDefault();
+    const pts = Array.from(pointers.values());
+    const dx = pts[0].x - pts[1].x;
+    const dy = pts[0].y - pts[1].y;
+    const dist = Math.hypot(dx, dy);
+
+    const cx = (pts[0].x + pts[1].x) / 2;
+    const cy = (pts[0].y + pts[1].y) / 2;
+
+    if (lastPinchDistance != null) {
+      const ratio = dist / lastPinchDistance;
+      let next = scale * ratio;
+      applyScale(next, { clientX: cx, clientY: cy });
+    }
+    lastPinchDistance = dist;
+  }
+}, { passive: false });
+
+['pointerup','pointercancel','pointerleave'].forEach(type => {
+  container.addEventListener(type, (e) => {
+    pointers.delete(e.pointerId);
+    if (pointers.size < 2) {
+      lastPinchDistance = null;
+    }
+  });
+});
+
+/* 키보드 단축키: Ctrl + (+/-/0) */
+window.addEventListener('keydown', (e) => {
+  if (e.ctrlKey && (e.key === '+' || e.key === '=')) {
+    e.preventDefault();
+    applyScale(scale * SCALE_STEP, null);
+  } else if (e.ctrlKey && (e.key === '-' || e.key === '_')) {
+    e.preventDefault();
+    applyScale(scale / SCALE_STEP, null);
+  } else if (e.ctrlKey && (e.key === '0')) {
+    e.preventDefault();
+    applyScale(1, null);
+    container.scrollTo({ left: 0, top: 0, behavior: 'instant' });
+  }
+});
+
+/* ===================== 저장/복원 ===================== */
+function saveImage(id, imgElement) {
+  if (!imgElement.naturalWidth) return;
+  const canvas = document.createElement('canvas');
+  canvas.width = imgElement.naturalWidth;
+  canvas.height = imgElement.naturalHeight;
+  const ctx = canvas.getContext('2d');
+  ctx.drawImage(imgElement, 0, 0);
+  const dataURL = canvas.toDataURL('image/png');
+  localStorage.setItem(id, dataURL);
+}
+
+function loadImage(id, imgElement) {
+  const dataURL = localStorage.getItem(id);
+  if(dataURL){
+    imgElement.src = dataURL;
+    imgElement.style.display = 'block';
+  }
+}
+
+function saveForegroundState() {
+  localStorage.setItem('fg-left', fg.style.left);
+  localStorage.setItem('fg-top', fg.style.top);
+  localStorage.setItem('fg-width', fg.style.width);
+  localStorage.setItem('fg-height', fg.style.height);
+}
+
+function loadForegroundState() {
+  const left = localStorage.getItem('fg-left');
+  const top = localStorage.getItem('fg-top');
+  const width = localStorage.getItem('fg-width');
+  const height = localStorage.getItem('fg-height');
+  if(left && top && width && height){
+    fg.style.left = left;
+    fg.style.top = top;
+    fg.style.width = width;
+    fg.style.height = height;
+    // 핸들은 fg 내부 right/bottom:0 스타일이라 자동 위치
+  }
+}
+
+/* ===================== 버튼 ===================== */
+btnBg.onclick = () => inputBg.click();
+btnFg.onclick = () => inputFg.click();
+
+inputBg.onchange = (e) => {
+  const file = e.target.files[0];
+  if(file){
+    const url = URL.createObjectURL(file);
+    bg.src = url;
+    bg.onload = () => {
+      saveImage('bg', bg);
+      // 배경 로드 후 스테이지 기본 크기 재계산
+      updateStageSize();
     };
+  }
+};
 
-    function calcDistance(lat1, lon1, lat2, lon2) {
-      function toRad(v) { return v * Math.PI / 180; }
-      const R = 6371000;
-      const dLat = toRad(lat2 - lat1);
-      const dLon = toRad(lon2 - lon1);
-      const a = Math.sin(dLat/2)**2 +
-                Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) *
-                Math.sin(dLon/2)**2;
-      return Math.round(R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a)));
-    }
+inputFg.onchange = (e) => {
+  const file = e.target.files[0];
+  if(file){
+    const url = URL.createObjectURL(file);
+    fg.src = url;
+    fg.style.display = 'block';
+    fgHandle.style.display = 'block';
 
-    function findNearestHole(position) {
-        let nearestHole = null;
-        let minDistance = Infinity;
-        
-        for (const [courseCode, course] of Object.entries(golfCourses)) {
-            for (const hole of course.holes) {
-                const distance = calcDistance(
-                    position.lat, position.lng,
-                    hole.green.lat, hole.green.lng
-                );
-                
-                if (distance < minDistance) { // 800m 제한 없이 가장 가까운 홀을 찾음
-                    minDistance = distance;
-                    nearestHole = { ...hole, courseName: course.name, courseCode, distance };
-                }
-            }
-        }
-        
-        return nearestHole;
-    }
+    // stage 기준 가운데 배치
+    const sRect = stage.getBoundingClientRect();
+    const initLeft = Math.max(0, (stage.clientWidth  - 150) / 2);
+    const initTop  = Math.max(0, (stage.clientHeight - 150) / 2);
+    fg.style.left = initLeft + 'px';
+    fg.style.top  = initTop  + 'px';
 
-    function updateDistances(position) {
-      const nearestHole = findNearestHole(position);
-      
-      if (nearestHole) {
-        const actualDistance = calcDistance(
-            position.lat, position.lng,
-            nearestHole.green.lat, nearestHole.green.lng
-        );
+    fg.onload = () => {
+      saveImage('fg', fg);
+      saveForegroundState();
+    };
+  }
+};
 
-        const backDist = Math.round(actualDistance + 15);
-        const midDist = Math.round(actualDistance);
-        const frontDist = Math.round(actualDistance - 15);
-        
-        document.getElementById('hole-num').textContent = `H${nearestHole.hole}`;
-        document.getElementById('par-num').textContent = `P${nearestHole.par}`;
-        document.getElementById('course-info').textContent = `${nearestHole.courseName} - 샤인데일CC`;
-        document.getElementById('back-distance').textContent = backDist;
-        document.getElementById('middle-distance').textContent = midDist;
-        document.getElementById('front-distance').textContent = frontDist;
-        
-        showMainContent();
-      } else {
-        showError('근처에 골프장이 없습니다.');
-      }
-    }
+/* ===================== 전경 드래그 ===================== */
+let isDragging = false, dragOffsetX=0, dragOffsetY=0;
 
-    function showLoading() {
-      document.getElementById('loading').style.display = 'block';
-      document.getElementById('main-content').style.display = 'none';
-      document.getElementById('error-content').style.display = 'none';
-    }
+function startDrag(e){
+  isDragging = true;
+  const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+  const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+  // stage 내 좌표로 변환 (stage는 실제 픽셀로 커졌으니 그대로 계산)
+  dragOffsetX = clientX - (fg.getBoundingClientRect().left);
+  dragOffsetY = clientY - (fg.getBoundingClientRect().top);
+  fg.style.cursor = 'grabbing';
+}
 
-    function showMainContent() {
-      document.getElementById('loading').style.display = 'none';
-      document.getElementById('error-content').style.display = 'none';
-      document.getElementById('main-content').style.display = 'flex';
-    }
+function dragMove(e){
+  if(!isDragging) return;
+  e.preventDefault();
+  const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+  const clientY = e.touches ? e.touches[0].clientY : e.clientY;
 
-    function showError(message) {
-      document.getElementById('loading').style.display = 'none';
-      document.getElementById('main-content').style.display = 'none';
-      document.getElementById('error-content').style.display = 'flex';
-      document.getElementById('error-message').textContent = message;
-    }
+  // stage의 스크롤 포함 좌표로 변환
+  const sRect = stage.getBoundingClientRect();
+  const cRect = container.getBoundingClientRect();
 
-    function getCurrentPosition() {
-        showLoading();
-        document.getElementById('status').textContent = 'GPS 위치 확인 중...';
-        
-        if (navigator.geolocation) {
-            const options = {
-                enableHighAccuracy: true,
-                timeout: 10000,
-                maximumAge: 30000
-            };
-            
-            watchId = navigator.geolocation.watchPosition(
-                (position) => {
-                    currentPosition = {
-                        lat: position.coords.latitude,
-                        lng: position.coords.longitude,
-                        accuracy: position.coords.accuracy
-                    };
-                    document.getElementById('status').textContent = 
-                        `GPS 정확도: ${Math.round(currentPosition.accuracy)}m`;
-                    updateDistances(currentPosition);
-                },
-                (error) => {
-                    let errorMsg = 'GPS 오류: ';
-                    switch (error.code) {
-                        case error.PERMISSION_DENIED:
-                            errorMsg += '위치 권한이 거부되었습니다.';
-                            break;
-                        case error.POSITION_UNAVAILABLE:
-                            errorMsg += '위치 정보를 사용할 수 없습니다.';
-                            break;
-                        case error.TIMEOUT:
-                            errorMsg += '위치 요청 시간이 초과되었습니다.';
-                            break;
-                        default:
-                            errorMsg += '알 수 없는 오류가 발생했습니다.';
-                    }
-                    showError(errorMsg);
-                },
-                options
-            );
-        } else {
-            showError('이 기기는 GPS를 지원하지 않습니다.');
-        }
-    }
+  // 드래그 목표 좌표(컨테이너 스크롤 포함)
+  const xInStage = (clientX - sRect.left) + container.scrollLeft - dragOffsetX + (fg.offsetLeft - (fg.getBoundingClientRect().left - sRect.left));
+  const yInStage = (clientY - sRect.top ) + container.scrollTop  - dragOffsetY + (fg.offsetTop  - (fg.getBoundingClientRect().top  - sRect.top));
 
-    document.getElementById('refresh-btn').addEventListener('click', () => {
-      getCurrentPosition();
-    });
+  // 경계 제한
+  const maxX = stage.clientWidth  - fg.clientWidth;
+  const maxY = stage.clientHeight - fg.clientHeight;
 
-    document.getElementById('error-refresh-btn').addEventListener('click', () => {
-      getCurrentPosition();
-    });
+  const nx = Math.min(Math.max(0, xInStage), maxX);
+  const ny = Math.min(Math.max(0, yInStage), maxY);
 
-    document.addEventListener('DOMContentLoaded', () => {
-        getCurrentPosition();
-    });
+  fg.style.left = nx + 'px';
+  fg.style.top  = ny + 'px';
 
-    window.addEventListener('beforeunload', () => {
-        if (watchId) {
-            navigator.geolocation.clearWatch(watchId);
-        }
-    });
-  </script>
+  saveForegroundState();
+}
+
+function stopDrag(){ isDragging=false; fg.style.cursor='grab'; }
+
+fg.addEventListener('mousedown', startDrag);
+fg.addEventListener('touchstart', startDrag, {passive:false});
+
+window.addEventListener('mousemove', dragMove, {passive:false});
+window.addEventListener('touchmove', dragMove, {passive:false});
+
+window.addEventListener('mouseup', stopDrag);
+window.addEventListener('touchend', stopDrag);
+
+/* ===================== 전경 크기 조절 ===================== */
+let isResizing = false;
+
+function startResize(e){
+  e.stopPropagation();
+  isResizing = true;
+}
+
+function resizeMove(e){
+  if(!isResizing) return;
+  e.preventDefault();
+  const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+  const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+
+  const sRect = stage.getBoundingClientRect();
+  const fgRect = fg.getBoundingClientRect();
+
+  let newWidth  = (clientX - fgRect.left);
+  let newHeight = (clientY - fgRect.top);
+
+  newWidth  = Math.max(30, newWidth);
+  newHeight = Math.max(30, newHeight);
+
+  // stage 경계 내에서만
+  const rightEdge = parseFloat(fg.style.left || '0') + newWidth;
+  const bottomEdge = parseFloat(fg.style.top || '0') + newHeight;
+  newWidth  = Math.min(newWidth,  stage.clientWidth  - parseFloat(fg.style.left || '0'));
+  newHeight = Math.min(newHeight, stage.clientHeight - parseFloat(fg.style.top  || '0'));
+
+  fg.style.width  = newWidth + 'px';
+  fg.style.height = newHeight + 'px';
+
+  saveForegroundState();
+}
+
+function stopResize(){ isResizing=false; }
+
+fgHandle.addEventListener('mousedown', startResize);
+fgHandle.addEventListener('touchstart', startResize, {passive:false});
+
+window.addEventListener('mousemove', resizeMove, {passive:false});
+window.addEventListener('touchmove', resizeMove, {passive:false});
+
+window.addEventListener('mouseup', stopResize);
+window.addEventListener('touchend', stopResize);
+
+/* ===================== 초기화 & 복원 ===================== */
+function restoreZoom() {
+  const saved = parseFloat(localStorage.getItem('zoom-scale') || '1');
+  if (!isNaN(saved) && saved > 0) {
+    applyScale(saved, null);
+  } else {
+    applyScale(1, null);
+  }
+}
+
+// 페이지 로드 시
+window.addEventListener('load', () => {
+  updateStageSize();        // 기본 크기 확정
+  restoreZoom();            // 배율 복원
+
+  loadImage('bg', bg);
+  loadImage('fg', fg);
+
+  if(fg.src){
+    fg.style.display = 'block';
+    fgHandle.style.display = 'block';
+    loadForegroundState();
+  }
+});
+
+// 창 크기 변경 시: 기본 크기 재계산 후 현재 배율 유지
+window.addEventListener('resize', () => {
+  const currentScale = scale;
+  updateStageSize();
+  applyScale(currentScale, null);
+});
+</script>
 </body>
 </html>
