@@ -33,27 +33,28 @@
     flex-grow: 1;
     background-color: #ccc;
     overflow: auto;            /* 확대 후 스크롤 */
-    touch-action: none;        /* 커스텀 핀치 제스처 처리 */
+    touch-action: none;        /* 핀치 제스처 직접 처리 */
   }
 
-  /* 확대/축소 대상(배경+전경을 모두 포함하는 래퍼) */
+  /* 확대/축소 대상 래퍼 (배경과 전경을 같이 담음) */
   #stage {
     position: relative;
-    width: 100%;              /* 초기 크기 = 컨테이너 크기 */
+    width: 100%;              /* 논리 크기(스케일 1 기준) */
     height: 100%;
-    transform-origin: 0 0;    /* 좌상단 기준 스케일 */
+    transform-origin: 0 0;
     will-change: transform;
   }
 
-  /* 배경/전경은 stage 내부로 이동 */
   #background {
     position: absolute;
+    inset: 0;
     width: 100%;
     height: 100%;
     object-fit: contain;
     user-select: none;
-    pointer-events: none;     /* 배경은 포인터 통과 */
+    pointer-events: none;
   }
+
   #foreground {
     position: absolute;
     width: 150px;
@@ -61,8 +62,9 @@
     cursor: grab;
     user-select: none;
     display: none;
-    touch-action: none;
+    touch-action: none; /* 전경 위 핀치 감지용 */
   }
+
   #fg-resize-handle {
     position: absolute;
     width: 15px;
@@ -73,7 +75,6 @@
     display: none;
   }
 
-  /* 우측 하단에 배율 표시 (옵션) */
   #zoomHud {
     position: fixed;
     right: 10px;
@@ -96,7 +97,6 @@
 </div>
 
 <div id="container">
-  <!-- 확대/축소 대상 래퍼 -->
   <div id="stage">
     <img id="background" src="" alt="배경이미지" />
     <img id="foreground" src="" alt="전경이미지" draggable="false" />
@@ -121,131 +121,101 @@ const container = document.getElementById('container');
 const stage = document.getElementById('stage');
 const zoomHud = document.getElementById('zoomHud');
 
-/* ===================== 확대/축소 공통 ===================== */
-let baseWidth = 0;    // stage의 기준 너비
-let baseHeight = 0;   // stage의 기준 높이
-let scale = 1;        // 현재 배율
+/* =============== 스케일/좌표 시스템 =============== */
+let baseW = 0, baseH = 0;   // 논리 크기(스케일 1 기준)
+let scale = 1;              // 배경+전경 공통 배율
 const MIN_SCALE = 0.25;
 const MAX_SCALE = 8;
 const SCALE_STEP = 1.1;
 
-function updateStageSize() {
-  // 컨테이너에 맞게 기본 크기를 설정 (배경 로드 전·후, 리사이즈 시 호출)
-  // 배경의 비율을 고려하려면 object-fit: contain 상태에서 컨테이너 크기를 기준으로 두는 게 자연스러움
-  baseWidth  = container.clientWidth;
-  baseHeight = container.clientHeight;
+const FG_MIN = 20;          // 전경 최소 논리 크기
+// 전경 상태(논리 좌표/크기)
+const fgState = { x: 0, y: 0, w: 150, h: 150, visible: false };
 
-  applyScale(scale, null);
+function clamp(v, min, max){ return Math.min(Math.max(v, min), max); }
+
+function updateBaseSize(){
+  baseW = container.clientWidth;
+  baseH = container.clientHeight;
 }
 
-function applyScale(nextScale, anchor /* {clientX, clientY} or null */) {
-  // 스케일 제한
-  nextScale = Math.max(MIN_SCALE, Math.min(MAX_SCALE, nextScale));
+function syncFgVisual(){
+  if (!fgState.visible) return;
+  fg.style.display = 'block';
+  fgHandle.style.display = 'block';
+  fg.style.left   = (fgState.x * scale) + 'px';
+  fg.style.top    = (fgState.y * scale) + 'px';
+  fg.style.width  = (fgState.w * scale) + 'px';
+  fg.style.height = (fgState.h * scale) + 'px';
+}
+
+/* ===== 배경 확대/축소: 배경+전경 동시에 같은 비율 ===== */
+function applyStageScale(next, anchor /* {clientX, clientY} | null */){
+  next = clamp(next, MIN_SCALE, MAX_SCALE);
+  const prev = scale;
 
   if (anchor) {
-    // 스케일 중심(anchor) 유지: 스크롤 위치 보정
     const rect = container.getBoundingClientRect();
-    const scrollLeft = container.scrollLeft;
-    const scrollTop  = container.scrollTop;
-    const ax = anchor.clientX - rect.left + scrollLeft;
-    const ay = anchor.clientY - rect.top  + scrollTop;
+    const sx = container.scrollLeft + (anchor.clientX - rect.left);
+    const sy = container.scrollTop  + (anchor.clientY - rect.top);
 
-    const prevScale = scale;
-    scale = nextScale;
+    scale = next;
+    stage.style.width  = (baseW * scale) + 'px';
+    stage.style.height = (baseH * scale) + 'px';
+    syncFgVisual();
 
-    const nx = ax * (scale / prevScale);
-    const ny = ay * (scale / prevScale);
-
-    // stage의 실제 박스 크기도 키워서 스크롤바가 실제로 생기도록 함
-    stage.style.width  = (baseWidth  * scale) + 'px';
-    stage.style.height = (baseHeight * scale) + 'px';
-    stage.style.transform = `scale(${1})`; // transform 대신 실제 크기 변경을 우선
-    // 위에서 width/height로 실제 크기를 바꾸기 때문에 transform은 1로 둡니다.
-    // (transform 스케일만 쓸 경우 스크롤 영역이 변하지 않는 문제가 있음)
-
-    // 앵커를 고정하려면 스크롤을 재계산
-    container.scrollLeft = nx - (anchor.clientX - rect.left);
-    container.scrollTop  = ny - (anchor.clientY - rect.top);
+    const ratio = scale / prev;
+    container.scrollLeft = sx * ratio - (anchor.clientX - rect.left);
+    container.scrollTop  = sy * ratio - (anchor.clientY - rect.top);
   } else {
-    scale = nextScale;
-    stage.style.width  = (baseWidth  * scale) + 'px';
-    stage.style.height = (baseHeight * scale) + 'px';
-    stage.style.transform = `scale(${1})`;
+    scale = next;
+    stage.style.width  = (baseW * scale) + 'px';
+    stage.style.height = (baseH * scale) + 'px';
+    syncFgVisual();
   }
 
   zoomHud.textContent = Math.round(scale * 100) + '%';
   localStorage.setItem('zoom-scale', String(scale));
 }
 
-/* 마우스 휠(CTRL+휠 또는 트랙패드 핀치) */
-container.addEventListener('wheel', (e) => {
-  // Ctrl 키가 눌린 경우만 확대/축소 (일반 스크롤은 그대로)
-  if (!e.ctrlKey) return;
-  e.preventDefault();
+/* ===== 전경만 확대/축소 (휠/핀치) ===== */
+function screenToStageLogical(clientX, clientY){
+  const rect = container.getBoundingClientRect();
+  const sx = container.scrollLeft + (clientX - rect.left);
+  const sy = container.scrollTop  + (clientY - rect.top);
+  return { lx: sx / scale, ly: sy / scale }; // 논리 좌표로
+}
 
-  const delta = e.deltaY;
-  const factor = delta > 0 ? (1 / SCALE_STEP) : SCALE_STEP;
-  const next = scale * factor;
-  applyScale(next, { clientX: e.clientX, clientY: e.clientY });
-}, { passive: false });
+/* 앵커(논리 좌표) 기준으로 전경 크기만 배율 변경 */
+function resizeForegroundByFactor(factor, anchorLogical){
+  if (!fgState.visible) return;
 
-/* 터치 핀치 확대/축소 (PointerEvent 기반) */
-let pointers = new Map();
-let lastPinchDistance = null;
+  let newW = clamp(fgState.w * factor, FG_MIN, baseW);
+  let newH = clamp(fgState.h * factor, FG_MIN, baseH);
 
-container.addEventListener('pointerdown', (e) => {
-  container.setPointerCapture(e.pointerId);
-  pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
-});
+  // 앵커를 기준으로 위치 조정 (앵커가 fg 내부 어디에 있는지 비율로 계산)
+  const ax = clamp(anchorLogical.lx, fgState.x, fgState.x + fgState.w);
+  const ay = clamp(anchorLogical.ly, fgState.y, fgState.y + fgState.h);
+  const relX = (ax - fgState.x) / fgState.w;
+  const relY = (ay - fgState.y) / fgState.h;
 
-container.addEventListener('pointermove', (e) => {
-  if (!pointers.has(e.pointerId)) return;
-  pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  let newX = ax - relX * newW;
+  let newY = ay - relY * newH;
 
-  if (pointers.size === 2) {
-    e.preventDefault();
-    const pts = Array.from(pointers.values());
-    const dx = pts[0].x - pts[1].x;
-    const dy = pts[0].y - pts[1].y;
-    const dist = Math.hypot(dx, dy);
+  // 경계 내로 보정
+  newX = clamp(newX, 0, Math.max(0, baseW - newW));
+  newY = clamp(newY, 0, Math.max(0, baseH - newH));
 
-    const cx = (pts[0].x + pts[1].x) / 2;
-    const cy = (pts[0].y + pts[1].y) / 2;
+  fgState.w = newW;
+  fgState.h = newH;
+  fgState.x = newX;
+  fgState.y = newY;
 
-    if (lastPinchDistance != null) {
-      const ratio = dist / lastPinchDistance;
-      let next = scale * ratio;
-      applyScale(next, { clientX: cx, clientY: cy });
-    }
-    lastPinchDistance = dist;
-  }
-}, { passive: false });
+  syncFgVisual();
+  saveFgState();
+}
 
-['pointerup','pointercancel','pointerleave'].forEach(type => {
-  container.addEventListener(type, (e) => {
-    pointers.delete(e.pointerId);
-    if (pointers.size < 2) {
-      lastPinchDistance = null;
-    }
-  });
-});
-
-/* 키보드 단축키: Ctrl + (+/-/0) */
-window.addEventListener('keydown', (e) => {
-  if (e.ctrlKey && (e.key === '+' || e.key === '=')) {
-    e.preventDefault();
-    applyScale(scale * SCALE_STEP, null);
-  } else if (e.ctrlKey && (e.key === '-' || e.key === '_')) {
-    e.preventDefault();
-    applyScale(scale / SCALE_STEP, null);
-  } else if (e.ctrlKey && (e.key === '0')) {
-    e.preventDefault();
-    applyScale(1, null);
-    container.scrollTo({ left: 0, top: 0, behavior: 'instant' });
-  }
-});
-
-/* ===================== 저장/복원 ===================== */
+/* =============== 저장/복원 =============== */
 function saveImage(id, imgElement) {
   if (!imgElement.naturalWidth) return;
   const canvas = document.createElement('canvas');
@@ -265,28 +235,35 @@ function loadImage(id, imgElement) {
   }
 }
 
-function saveForegroundState() {
-  localStorage.setItem('fg-left', fg.style.left);
-  localStorage.setItem('fg-top', fg.style.top);
-  localStorage.setItem('fg-width', fg.style.width);
-  localStorage.setItem('fg-height', fg.style.height);
+function saveFgState(){
+  localStorage.setItem('fg-x', String(fgState.x));
+  localStorage.setItem('fg-y', String(fgState.y));
+  localStorage.setItem('fg-w', String(fgState.w));
+  localStorage.setItem('fg-h', String(fgState.h));
+  localStorage.setItem('fg-visible', fgState.visible ? '1' : '0');
 }
 
-function loadForegroundState() {
-  const left = localStorage.getItem('fg-left');
-  const top = localStorage.getItem('fg-top');
-  const width = localStorage.getItem('fg-width');
-  const height = localStorage.getItem('fg-height');
-  if(left && top && width && height){
-    fg.style.left = left;
-    fg.style.top = top;
-    fg.style.width = width;
-    fg.style.height = height;
-    // 핸들은 fg 내부 right/bottom:0 스타일이라 자동 위치
+function loadFgState(){
+  const vis = localStorage.getItem('fg-visible') === '1';
+  const x = parseFloat(localStorage.getItem('fg-x') || '0');
+  const y = parseFloat(localStorage.getItem('fg-y') || '0');
+  const w = parseFloat(localStorage.getItem('fg-w') || '150');
+  const h = parseFloat(localStorage.getItem('fg-h') || '150');
+
+  fgState.visible = vis;
+  fgState.x = isNaN(x) ? 0 : x;
+  fgState.y = isNaN(y) ? 0 : y;
+  fgState.w = isNaN(w) ? 150 : w;
+  fgState.h = isNaN(h) ? 150 : h;
+
+  if (fgState.visible) {
+    fg.style.display = 'block';
+    fgHandle.style.display = 'block';
+    syncFgVisual();
   }
 }
 
-/* ===================== 버튼 ===================== */
+/* =============== 버튼/파일 입력 =============== */
 btnBg.onclick = () => inputBg.click();
 btnFg.onclick = () => inputFg.click();
 
@@ -297,8 +274,8 @@ inputBg.onchange = (e) => {
     bg.src = url;
     bg.onload = () => {
       saveImage('bg', bg);
-      // 배경 로드 후 스테이지 기본 크기 재계산
-      updateStageSize();
+      updateBaseSize();
+      applyStageScale(scale, null);
     };
   }
 };
@@ -308,150 +285,206 @@ inputFg.onchange = (e) => {
   if(file){
     const url = URL.createObjectURL(file);
     fg.src = url;
-    fg.style.display = 'block';
-    fgHandle.style.display = 'block';
-
-    // stage 기준 가운데 배치
-    const sRect = stage.getBoundingClientRect();
-    const initLeft = Math.max(0, (stage.clientWidth  - 150) / 2);
-    const initTop  = Math.max(0, (stage.clientHeight - 150) / 2);
-    fg.style.left = initLeft + 'px';
-    fg.style.top  = initTop  + 'px';
-
-    fg.onload = () => {
-      saveImage('fg', fg);
-      saveForegroundState();
-    };
+    fg.onload = () => saveImage('fg', fg);
+    // 중앙 배치(논리)
+    fgState.w = 150; fgState.h = 150;
+    fgState.x = Math.max(0, (baseW - fgState.w)/2);
+    fgState.y = Math.max(0, (baseH - fgState.h)/2);
+    fgState.visible = true;
+    saveFgState();
+    syncFgVisual();
   }
 };
 
-/* ===================== 전경 드래그 ===================== */
-let isDragging = false, dragOffsetX=0, dragOffsetY=0;
+/* =============== 전경 드래그(배율 고려) =============== */
+let dragging = false, dragDX=0, dragDY=0;
 
 function startDrag(e){
-  isDragging = true;
-  const clientX = e.touches ? e.touches[0].clientX : e.clientX;
-  const clientY = e.touches ? e.touches[0].clientY : e.clientY;
-  // stage 내 좌표로 변환 (stage는 실제 픽셀로 커졌으니 그대로 계산)
-  dragOffsetX = clientX - (fg.getBoundingClientRect().left);
-  dragOffsetY = clientY - (fg.getBoundingClientRect().top);
+  if (!fgState.visible) return;
+  dragging = true;
+  const p = e.touches ? e.touches[0] : e;
+  const fgRect = fg.getBoundingClientRect();
+  dragDX = p.clientX - fgRect.left;
+  dragDY = p.clientY - fgRect.top;
   fg.style.cursor = 'grabbing';
 }
 
 function dragMove(e){
-  if(!isDragging) return;
+  if(!dragging) return;
   e.preventDefault();
-  const clientX = e.touches ? e.touches[0].clientX : e.clientX;
-  const clientY = e.touches ? e.touches[0].clientY : e.clientY;
-
-  // stage의 스크롤 포함 좌표로 변환
+  const p = e.touches ? e.touches[0] : e;
   const sRect = stage.getBoundingClientRect();
-  const cRect = container.getBoundingClientRect();
 
-  // 드래그 목표 좌표(컨테이너 스크롤 포함)
-  const xInStage = (clientX - sRect.left) + container.scrollLeft - dragOffsetX + (fg.offsetLeft - (fg.getBoundingClientRect().left - sRect.left));
-  const yInStage = (clientY - sRect.top ) + container.scrollTop  - dragOffsetY + (fg.offsetTop  - (fg.getBoundingClientRect().top  - sRect.top));
+  const xScreen = p.clientX - sRect.left - dragDX + container.scrollLeft;
+  const yScreen = p.clientY - sRect.top  - dragDY + container.scrollTop;
 
-  // 경계 제한
-  const maxX = stage.clientWidth  - fg.clientWidth;
-  const maxY = stage.clientHeight - fg.clientHeight;
+  let nx = xScreen / scale;
+  let ny = yScreen / scale;
 
-  const nx = Math.min(Math.max(0, xInStage), maxX);
-  const ny = Math.min(Math.max(0, yInStage), maxY);
+  nx = clamp(nx, 0, baseW - fgState.w);
+  ny = clamp(ny, 0, baseH - fgState.h);
 
-  fg.style.left = nx + 'px';
-  fg.style.top  = ny + 'px';
-
-  saveForegroundState();
+  fgState.x = nx;
+  fgState.y = ny;
+  syncFgVisual();
+  saveFgState();
 }
 
-function stopDrag(){ isDragging=false; fg.style.cursor='grab'; }
+function stopDrag(){ dragging=false; fg.style.cursor='grab'; }
 
 fg.addEventListener('mousedown', startDrag);
 fg.addEventListener('touchstart', startDrag, {passive:false});
-
 window.addEventListener('mousemove', dragMove, {passive:false});
 window.addEventListener('touchmove', dragMove, {passive:false});
-
 window.addEventListener('mouseup', stopDrag);
 window.addEventListener('touchend', stopDrag);
 
-/* ===================== 전경 크기 조절 ===================== */
-let isResizing = false;
+/* =============== 전경 리사이즈(핸들, 배율 고려) =============== */
+let resizing = false;
 
 function startResize(e){
   e.stopPropagation();
-  isResizing = true;
+  resizing = true;
 }
 
 function resizeMove(e){
-  if(!isResizing) return;
+  if(!resizing) return;
   e.preventDefault();
-  const clientX = e.touches ? e.touches[0].clientX : e.clientX;
-  const clientY = e.touches ? e.touches[0].clientY : e.clientY;
-
-  const sRect = stage.getBoundingClientRect();
+  const p = e.touches ? e.touches[0] : e;
   const fgRect = fg.getBoundingClientRect();
 
-  let newWidth  = (clientX - fgRect.left);
-  let newHeight = (clientY - fgRect.top);
+  let newW = Math.max(FG_MIN, (p.clientX - fgRect.left) / scale);
+  let newH = Math.max(FG_MIN, (p.clientY - fgRect.top)  / scale);
 
-  newWidth  = Math.max(30, newWidth);
-  newHeight = Math.max(30, newHeight);
+  newW = Math.min(newW, baseW - fgState.x);
+  newH = Math.min(newH, baseH - fgState.y);
 
-  // stage 경계 내에서만
-  const rightEdge = parseFloat(fg.style.left || '0') + newWidth;
-  const bottomEdge = parseFloat(fg.style.top || '0') + newHeight;
-  newWidth  = Math.min(newWidth,  stage.clientWidth  - parseFloat(fg.style.left || '0'));
-  newHeight = Math.min(newHeight, stage.clientHeight - parseFloat(fg.style.top  || '0'));
+  fgState.w = newW;
+  fgState.h = newH;
 
-  fg.style.width  = newWidth + 'px';
-  fg.style.height = newHeight + 'px';
-
-  saveForegroundState();
+  syncFgVisual();
+  saveFgState();
 }
 
-function stopResize(){ isResizing=false; }
+function stopResize(){ resizing=false; }
 
 fgHandle.addEventListener('mousedown', startResize);
 fgHandle.addEventListener('touchstart', startResize, {passive:false});
-
 window.addEventListener('mousemove', resizeMove, {passive:false});
 window.addEventListener('touchmove', resizeMove, {passive:false});
-
 window.addEventListener('mouseup', stopResize);
 window.addEventListener('touchend', stopResize);
 
-/* ===================== 초기화 & 복원 ===================== */
-function restoreZoom() {
-  const saved = parseFloat(localStorage.getItem('zoom-scale') || '1');
-  if (!isNaN(saved) && saved > 0) {
-    applyScale(saved, null);
-  } else {
-    applyScale(1, null);
+/* =============== 확대/축소 입력 처리 =============== */
+/* 1) 컨테이너에서 Ctrl+휠 = 배경(=전체) 확대/축소 */
+container.addEventListener('wheel', (e) => {
+  // 전경 위에서 Ctrl+휠이면 전경만 확대 (아래 fg 휠 핸들러에서 처리)
+  if (e.ctrlKey && fgState.visible && e.target === fg) return;
+
+  if (!e.ctrlKey) return;  // 일반 스크롤 허용
+  e.preventDefault();
+  const next = scale * (e.deltaY > 0 ? 1 / SCALE_STEP : SCALE_STEP);
+  applyStageScale(next, { clientX: e.clientX, clientY: e.clientY });
+}, { passive:false });
+
+/* 2) 전경 위에서 Ctrl+휠 = 전경만 확대/축소 */
+fg.addEventListener('wheel', (e) => {
+  if (!e.ctrlKey) return;
+  e.preventDefault();
+  const factor = (e.deltaY > 0) ? (1 / SCALE_STEP) : SCALE_STEP;
+  const anchor = screenToStageLogical(e.clientX, e.clientY);
+  resizeForegroundByFactor(factor, anchor);
+}, { passive:false });
+
+/* 3) 핀치 제스처: 컨테이너에서 두 손가락 = 전체 확대/축소 */
+let containerPointers = new Map();
+let lastPinchDist = null;
+
+container.addEventListener('pointerdown', (e) => {
+  container.setPointerCapture(e.pointerId);
+  containerPointers.set(e.pointerId, { x: e.clientX, y: e.clientY, target: e.target });
+});
+
+container.addEventListener('pointermove', (e) => {
+  if (!containerPointers.has(e.pointerId)) return;
+  containerPointers.set(e.pointerId, { x: e.clientX, y: e.clientY, target: e.target });
+
+  if (containerPointers.size === 2) {
+    e.preventDefault();
+    const pts = Array.from(containerPointers.values());
+    const [p0, p1] = pts;
+
+    const dx = p0.x - p1.x;
+    const dy = p0.y - p1.y;
+    const dist = Math.hypot(dx, dy);
+    const cx = (p0.x + p1.x) / 2;
+    const cy = (p0.y + p1.y) / 2;
+
+    // 전경 위에서 발생한 두 손가락이라면 전경만 확대/축소
+    const bothOnFg = pts.every(p => p.target === fg);
+    if (bothOnFg && fgState.visible) {
+      if (lastPinchDist != null) {
+        const ratio = dist / lastPinchDist;
+        resizeForegroundByFactor(ratio, screenToStageLogical(cx, cy));
+      }
+      lastPinchDist = dist;
+      return;
+    }
+
+    // 그 외는 배경+전경 전체 확대/축소
+    if (lastPinchDist != null) {
+      const ratio = dist / lastPinchDist;
+      applyStageScale(scale * ratio, { clientX: cx, clientY: cy });
+    }
+    lastPinchDist = dist;
   }
-}
+}, { passive:false });
 
-// 페이지 로드 시
-window.addEventListener('load', () => {
-  updateStageSize();        // 기본 크기 확정
-  restoreZoom();            // 배율 복원
+['pointerup','pointercancel','pointerleave'].forEach(type => {
+  container.addEventListener(type, (e) => {
+    containerPointers.delete(e.pointerId);
+    if (containerPointers.size < 2) lastPinchDist = null;
+  });
+});
 
-  loadImage('bg', bg);
-  loadImage('fg', fg);
-
-  if(fg.src){
-    fg.style.display = 'block';
-    fgHandle.style.display = 'block';
-    loadForegroundState();
+/* 4) 단축키: Ctrl + (+/-/0) = 전체 확대/축소/리셋 */
+window.addEventListener('keydown', (e) => {
+  if (e.ctrlKey && (e.key === '+' || e.key === '=')) {
+    e.preventDefault();
+    applyStageScale(scale * SCALE_STEP, null);
+  } else if (e.ctrlKey && (e.key === '-' || e.key === '_')) {
+    e.preventDefault();
+    applyStageScale(scale / SCALE_STEP, null);
+  } else if (e.ctrlKey && (e.key === '0')) {
+    e.preventDefault();
+    applyStageScale(1, null);
+    container.scrollTo({ left: 0, top: 0, behavior: 'instant' });
   }
 });
 
-// 창 크기 변경 시: 기본 크기 재계산 후 현재 배율 유지
+/* =============== 초기화/복원 =============== */
+function restoreZoom(){
+  const saved = parseFloat(localStorage.getItem('zoom-scale') || '1');
+  applyStageScale(isNaN(saved) || saved <= 0 ? 1 : saved, null);
+}
+
+window.addEventListener('load', () => {
+  updateBaseSize();
+  restoreZoom();
+
+  loadImage('bg', bg);
+  loadImage('fg', fg);
+  loadFgState();
+
+  stage.style.width  = (baseW * scale) + 'px';
+  stage.style.height = (baseH * scale) + 'px';
+  syncFgVisual();
+});
+
 window.addEventListener('resize', () => {
-  const currentScale = scale;
-  updateStageSize();
-  applyScale(currentScale, null);
+  const cur = scale;
+  updateBaseSize();
+  applyStageScale(cur, null);
 });
 </script>
 </body>
