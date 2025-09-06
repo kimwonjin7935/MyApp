@@ -19,25 +19,18 @@
   }
   button:hover { background: #0056b3; }
 
-  /* 확대 후 스크롤 영역 */
   #container {
     position: relative; flex-grow: 1; background: #ccc;
-    overflow: auto;           /* 스크롤은 우리가 직접 패닝으로도 이동 */
-    touch-action: none;       /* 기본 제스처 막고 커스텀 핀치/패닝 */
+    overflow: auto; touch-action: none;
   }
-
-  /* 배경+전경을 담는 캔버스(실제 픽셀로 크기 변경) */
   #stage {
     position: relative;
-    width: 100%;   /* 초기값, 로드 후 baseW/baseH로 재설정 */
-    height: 100%;
+    width: 100%; height: 100%;
   }
-
   #background {
     position: absolute; inset: 0; width: 100%; height: 100%;
     object-fit: contain; user-select: none; pointer-events: none;
   }
-
   #foreground {
     position: absolute; width: 150px; height: 150px;
     cursor: grab; user-select: none; display: none; touch-action: none;
@@ -47,7 +40,6 @@
     background: rgba(0,0,0,.5); right: 0; bottom: 0;
     cursor: se-resize; display: none;
   }
-
   #zoomHud {
     position: fixed; right: 10px; bottom: 10px;
     background: rgba(0,0,0,.55); color: #fff; padding: 6px 10px;
@@ -70,333 +62,171 @@
   </div>
 </div>
 
-<div id="zoomHud" aria-hidden="true">100%</div>
+<div id="zoomHud">100%</div>
 
 <input type="file" id="inputBg" accept="image/*" style="display:none;" />
 <input type="file" id="inputFg" accept="image/*" style="display:none;" />
 
 <script>
+const container = document.getElementById('container');
+const stage = document.getElementById('stage');
+const bg = document.getElementById('background');
+const fg = document.getElementById('foreground');
+const fgHandle = document.getElementById('fg-resize-handle');
+const zoomHud = document.getElementById('zoomHud');
 const btnBg = document.getElementById('btnBg');
 const btnFg = document.getElementById('btnFg');
 const inputBg = document.getElementById('inputBg');
 const inputFg = document.getElementById('inputFg');
-const bg = document.getElementById('background');
-const fg = document.getElementById('foreground');
-const fgHandle = document.getElementById('fg-resize-handle');
-const container = document.getElementById('container');
-const stage = document.getElementById('stage');
-const zoomHud = document.getElementById('zoomHud');
 
-/* ====== 좌표/배율 상태 ====== */
-let baseW = 0, baseH = 0;   // 스케일1 기준 크기(배경 표시 크기)
-let scale = 1;              // 배경+전경 공통 배율
-const MIN_SCALE = 0.25, MAX_SCALE = 8, STEP = 1.1;
+let baseW = 0, baseH = 0;
+let scale = 1;
+const STEP = 1.1;
+const MIN_SCALE = 0.25, MAX_SCALE = 8;
 
-const FG_MIN = 20;
-const fgState = { x:0, y:0, w:150, h:150, visible:false };
+const fgState = {x:0, y:0, w:150, h:150, visible:false};
+const clamp = (v,a,b)=>Math.min(Math.max(v,a),b);
 
-const clamp = (v, a, b)=> Math.min(Math.max(v, a), b);
-
-/* 배경 이미지 비율에 맞춰 baseW/H를 컨테이너에 맞게 계산 */
+/* === 공통 유틸 === */
 function computeBaseSize(){
   const cw = container.clientWidth, ch = container.clientHeight;
-  if (bg.naturalWidth && bg.naturalHeight) {
-    const s = Math.min(cw / bg.naturalWidth, ch / bg.naturalHeight);
-    baseW = Math.max(1, Math.round(bg.naturalWidth * s));
-    baseH = Math.max(1, Math.round(bg.naturalHeight * s));
-  } else {
-    baseW = cw; baseH = ch;
-  }
+  if (bg.naturalWidth && bg.naturalHeight){
+    const s = Math.min(cw/bg.naturalWidth, ch/bg.naturalHeight);
+    baseW = bg.naturalWidth*s; baseH = bg.naturalHeight*s;
+  } else { baseW=cw; baseH=ch; }
 }
-
-/* stage 실제 크기 반영 + 전경 표시 동기화 */
 function applyStageSize(){
-  stage.style.width  = (baseW * scale) + 'px';
-  stage.style.height = (baseH * scale) + 'px';
-  // 배경은 stage 100%이므로 동일 비율로 커짐
+  stage.style.width = (baseW*scale)+"px";
+  stage.style.height= (baseH*scale)+"px";
   syncFgVisual();
 }
-
-/* 전경 표시(논리 -> 화면) */
 function syncFgVisual(){
-  if (!fgState.visible) return;
-  fg.style.display = 'block';
-  fgHandle.style.display = 'block';
-  fg.style.left   = (fgState.x * scale) + 'px';
-  fg.style.top    = (fgState.y * scale) + 'px';
-  fg.style.width  = (fgState.w * scale) + 'px';
-  fg.style.height = (fgState.h * scale) + 'px';
+  if(!fgState.visible) return;
+  fg.style.display='block'; fgHandle.style.display='block';
+  fg.style.left = (fgState.x*scale)+"px";
+  fg.style.top  = (fgState.y*scale)+"px";
+  fg.style.width= (fgState.w*scale)+"px";
+  fg.style.height=(fgState.h*scale)+"px";
 }
-
-/* ====== 저장/복원 ====== */
-function saveImage(id, el){
-  if (!el.naturalWidth) return;
-  const c = document.createElement('canvas');
-  c.width = el.naturalWidth; c.height = el.naturalHeight;
-  c.getContext('2d').drawImage(el,0,0);
-  localStorage.setItem(id, c.toDataURL('image/png'));
-}
-function loadImage(id, el){
-  const d = localStorage.getItem(id);
-  if (d){ el.src = d; el.style.display='block'; }
-}
-function saveFg(){ for (const k in fgState) localStorage.setItem('fg-'+k, String(fgState[k])); }
-function loadFg(){
-  fgState.visible = localStorage.getItem('fg-visible') === 'true' || localStorage.getItem('fg-visible') === '1';
-  fgState.x = parseFloat(localStorage.getItem('fg-x')||'0')||0;
-  fgState.y = parseFloat(localStorage.getItem('fg-y')||'0')||0;
-  fgState.w = parseFloat(localStorage.getItem('fg-w')||'150')||150;
-  fgState.h = parseFloat(localStorage.getItem('fg-h')||'150')||150;
-  if (fgState.visible){ fg.style.display='block'; fgHandle.style.display='block'; syncFgVisual(); }
-}
-
-/* ====== 배경 확대/축소(전체) ====== */
-function applyStageScale(next, anchor){ // anchor: {clientX, clientY} | null
-  next = clamp(next, MIN_SCALE, MAX_SCALE);
-  const prev = scale;
-
-  if (anchor){
-    const rect = container.getBoundingClientRect();
-    const anchorScrollX = container.scrollLeft + (anchor.clientX - rect.left);
-    const anchorScrollY = container.scrollTop  + (anchor.clientY - rect.top);
-
-    scale = next;
-    applyStageSize();
-
-    const ratio = scale / prev;
-    container.scrollLeft = anchorScrollX * ratio - (anchor.clientX - rect.left);
-    container.scrollTop  = anchorScrollY * ratio - (anchor.clientY - rect.top);
-  } else {
-    scale = next;
-    applyStageSize();
-  }
-
-  zoomHud.textContent = Math.round(scale*100)+'%';
-  localStorage.setItem('zoom-scale', String(scale));
-}
-
-/* ====== 전경만 확대/축소 ====== */
 function screenToLogical(clientX, clientY){
   const rect = container.getBoundingClientRect();
   return {
-    lx: (container.scrollLeft + (clientX - rect.left)) / scale,
-    ly: (container.scrollTop  + (clientY - rect.top )) / scale
+    lx: (container.scrollLeft + (clientX-rect.left))/scale,
+    ly: (container.scrollTop  + (clientY-rect.top ))/scale
   };
 }
+
+/* === 배경 확대 === */
+function applyStageScale(next, anchor){
+  next = clamp(next, MIN_SCALE, MAX_SCALE);
+  const prev = scale;
+  if(anchor){
+    const rect = container.getBoundingClientRect();
+    const ax = container.scrollLeft+(anchor.clientX-rect.left);
+    const ay = container.scrollTop +(anchor.clientY-rect.top);
+    scale=next; applyStageSize();
+    const ratio = scale/prev;
+    container.scrollLeft = ax*ratio - (anchor.clientX-rect.left);
+    container.scrollTop  = ay*ratio - (anchor.clientY-rect.top);
+  } else { scale=next; applyStageSize(); }
+  zoomHud.textContent=Math.round(scale*100)+'%';
+}
+
+/* === 전경 확대 === */
 function resizeForegroundByFactor(factor, anchorLogical){
-  if (!fgState.visible) return;
-
-  let newW = clamp(fgState.w * factor, FG_MIN, baseW);
-  let newH = clamp(fgState.h * factor, FG_MIN, baseH);
-
-  const ax = clamp(anchorLogical.lx, fgState.x, fgState.x + fgState.w);
-  const ay = clamp(anchorLogical.ly, fgState.y, fgState.y + fgState.h);
-  const relX = (ax - fgState.x) / fgState.w;
-  const relY = (ay - fgState.y) / fgState.h;
-
-  let newX = ax - relX * newW;
-  let newY = ay - relY * newH;
-
-  newX = clamp(newX, 0, Math.max(0, baseW - newW));
-  newY = clamp(newY, 0, Math.max(0, baseH - newH));
-
-  fgState.x = newX; fgState.y = newY; fgState.w = newW; fgState.h = newH;
-  syncFgVisual(); saveFg();
+  if(!fgState.visible) return;
+  let newW=clamp(fgState.w*factor,20,baseW);
+  let newH=clamp(fgState.h*factor,20,baseH);
+  const ax = clamp(anchorLogical.lx, fgState.x, fgState.x+fgState.w);
+  const ay = clamp(anchorLogical.ly, fgState.y, fgState.y+fgState.h);
+  const relX=(ax-fgState.x)/fgState.w, relY=(ay-fgState.y)/fgState.h;
+  let newX=ax-relX*newW, newY=ay-relY*newH;
+  newX=clamp(newX,0,baseW-newW); newY=clamp(newY,0,baseH-newH);
+  fgState.x=newX; fgState.y=newY; fgState.w=newW; fgState.h=newH;
+  syncFgVisual();
 }
 
-/* ====== 파일 입력 ====== */
-btnBg.onclick = ()=> inputBg.click();
-btnFg.onclick = ()=> inputFg.click();
-
-inputBg.onchange = (e)=>{
-  const f = e.target.files[0]; if(!f) return;
-  const url = URL.createObjectURL(f);
-  bg.src = url;
-  bg.onload = ()=>{
-    saveImage('bg', bg);
-    computeBaseSize();                // 배경 비율 기준으로 baseW/H 설정
-    applyStageSize();                 // stage 크기 반영
-    applyStageScale(scale, null);     // 현재 배율 유지(스크롤 영역 갱신)
-  };
-};
-
-inputFg.onchange = (e)=>{
-  const f = e.target.files[0]; if(!f) return;
-  const url = URL.createObjectURL(f);
-  fg.src = url;
-  fg.onload = ()=> saveImage('fg', fg);
-  fgState.w = 150; fgState.h = 150;
-  fgState.x = Math.max(0, (baseW - fgState.w)/2);
-  fgState.y = Math.max(0, (baseH - fgState.h)/2);
-  fgState.visible = true;
-  saveFg(); syncFgVisual();
-};
-
-/* ====== 전경 드래그 ====== */
+/* === 전경 드래그 (논리 좌표 기준) === */
 let dragging=false, dragDX=0, dragDY=0;
 function startDrag(e){
-  if (!fgState.visible) return;
-  dragging = true;
-  const p = e.touches ? e.touches[0] : e;
-  const r = fg.getBoundingClientRect();
-  dragDX = p.clientX - r.left;
-  dragDY = p.clientY - r.top;
+  if(!fgState.visible) return;
+  dragging=true;
+  const p=e.touches?e.touches[0]:e;
+  const {lx,ly}=screenToLogical(p.clientX,p.clientY);
+  dragDX=lx-fgState.x; dragDY=ly-fgState.y;
   fg.style.cursor='grabbing';
 }
 function dragMove(e){
   if(!dragging) return;
   e.preventDefault();
-  const p = e.touches ? e.touches[0] : e;
-  const sRect = stage.getBoundingClientRect();
-  const xScreen = p.clientX - sRect.left - dragDX + container.scrollLeft;
-  const yScreen = p.clientY - sRect.top  - dragDY + container.scrollTop;
-  let nx = xScreen / scale, ny = yScreen / scale;
-  nx = clamp(nx, 0, baseW - fgState.w);
-  ny = clamp(ny, 0, baseH - fgState.h);
-  fgState.x = nx; fgState.y = ny;
-  syncFgVisual(); saveFg();
+  const p=e.touches?e.touches[0]:e;
+  const {lx,ly}=screenToLogical(p.clientX,p.clientY);
+  let nx=lx-dragDX, ny=ly-dragDY;
+  nx=clamp(nx,0,baseW-fgState.w);
+  ny=clamp(ny,0,baseH-fgState.h);
+  fgState.x=nx; fgState.y=ny;
+  syncFgVisual();
 }
 function stopDrag(){ dragging=false; fg.style.cursor='grab'; }
 
 fg.addEventListener('mousedown', startDrag);
-fg.addEventListener('touchstart', startDrag, {passive:false});
-window.addEventListener('mousemove', dragMove, {passive:false});
-window.addEventListener('touchmove', dragMove, {passive:false});
+fg.addEventListener('touchstart', startDrag,{passive:false});
+window.addEventListener('mousemove', dragMove,{passive:false});
+window.addEventListener('touchmove', dragMove,{passive:false});
 window.addEventListener('mouseup', stopDrag);
 window.addEventListener('touchend', stopDrag);
 
-/* ====== 전경 리사이즈(핸들) ====== */
+/* === 전경 리사이즈 핸들 === */
 let resizing=false;
-function startResize(e){ e.stopPropagation(); resizing=true; }
-function resizeMove(e){
+fgHandle.addEventListener('mousedown',e=>{e.stopPropagation();resizing=true;});
+window.addEventListener('mousemove',e=>{
   if(!resizing) return; e.preventDefault();
-  const p = e.touches ? e.touches[0] : e;
-  const r = fg.getBoundingClientRect();
-  let newW = Math.max(FG_MIN, (p.clientX - r.left) / scale);
-  let newH = Math.max(FG_MIN, (p.clientY - r.top ) / scale);
-  newW = Math.min(newW, baseW - fgState.x);
-  newH = Math.min(newH, baseH - fgState.y);
-  fgState.w = newW; fgState.h = newH;
-  syncFgVisual(); saveFg();
-}
-function stopResize(){ resizing=false; }
+  let newW=(e.clientX-fg.getBoundingClientRect().left)/scale;
+  let newH=(e.clientY-fg.getBoundingClientRect().top )/scale;
+  fgState.w=clamp(newW,20,baseW-fgState.x);
+  fgState.h=clamp(newH,20,baseH-fgState.y);
+  syncFgVisual();
+},{passive:false});
+window.addEventListener('mouseup',()=>{resizing=false;});
 
-fgHandle.addEventListener('mousedown', startResize);
-fgHandle.addEventListener('touchstart', startResize, {passive:false});
-window.addEventListener('mousemove', resizeMove, {passive:false});
-window.addEventListener('touchmove', resizeMove, {passive:false});
-window.addEventListener('mouseup', stopResize);
-window.addEventListener('touchend', stopResize);
-
-/* ====== 확대/축소 입력 ====== */
-/* 컨테이너에서 Ctrl+휠 → 배경(전체) 확대/축소 */
-container.addEventListener('wheel', (e)=>{
-  // 전경 위에서 Ctrl+휠이면 아래 핸들러에서 처리
-  if (e.ctrlKey && fgState.visible && e.target === fg) return;
-  if (!e.ctrlKey) return; // 일반 스크롤은 그대로
-  e.preventDefault();
-  const next = scale * (e.deltaY > 0 ? 1/STEP : STEP);
-  applyStageScale(next, { clientX: e.clientX, clientY: e.clientY });
-}, {passive:false});
-
-/* 전경 위 Ctrl+휠 → 전경만 확대/축소 */
-fg.addEventListener('wheel', (e)=>{
-  if (!e.ctrlKey) return;
-  e.preventDefault();
-  const factor = (e.deltaY > 0) ? 1/STEP : STEP;
-  const anchor = screenToLogical(e.clientX, e.clientY);
-  resizeForegroundByFactor(factor, anchor);
-}, {passive:false});
-
-/* 핀치: 두 손가락이 전경 내부이면 전경만, 아니면 전체 */
-let ptrs = new Map();
-let lastDist = null;
-function pointInFg(x, y){
-  const r = fg.getBoundingClientRect();
-  return (x >= r.left && x <= r.right && y >= r.top && y <= r.bottom);
-}
-container.addEventListener('pointerdown', (e)=>{
-  container.setPointerCapture(e.pointerId);
-  ptrs.set(e.pointerId, {x:e.clientX, y:e.clientY});
-});
-container.addEventListener('pointermove', (e)=>{
-  if (!ptrs.has(e.pointerId)) return;
-  ptrs.set(e.pointerId, {x:e.clientX, y:e.clientY});
-
-  if (ptrs.size === 2){
+/* === 확대 입력 === */
+container.addEventListener('wheel',e=>{
+  if(e.ctrlKey){
+    if(e.target===fg) return; // 전경 휠은 별도
     e.preventDefault();
-    const p = Array.from(ptrs.values());
-    const dx = p[0].x - p[1].x, dy = p[0].y - p[1].y;
-    const dist = Math.hypot(dx, dy);
-    const cx = (p[0].x + p[1].x)/2, cy = (p[0].y + p[1].y)/2;
-
-    if (lastDist != null){
-      const ratio = dist / lastDist;
-      const bothInFg = fgState.visible && p.every(pt => pointInFg(pt.x, pt.y));
-      if (bothInFg){
-        resizeForegroundByFactor(ratio, screenToLogical(cx, cy));
-      } else {
-        applyStageScale(scale * ratio, { clientX: cx, clientY: cy });
-      }
-    }
-    lastDist = dist;
+    applyStageScale(scale*(e.deltaY>0?1/STEP:STEP),{clientX:e.clientX,clientY:e.clientY});
   }
-}, {passive:false});
-['pointerup','pointercancel','pointerleave'].forEach(t=>{
-  container.addEventListener(t, e=>{
-    ptrs.delete(e.pointerId);
-    if (ptrs.size < 2) lastDist = null;
-  });
-});
-
-/* 1손가락 드래그로 패닝(스크롤 이동) — 전경을 잡지 않았을 때만 */
-let panning = false, panStartX=0, panStartY=0, startScrollX=0, startScrollY=0;
-container.addEventListener('pointerdown', (e)=>{
-  // 전경 위가 아니고, 두 손가락 핀치가 시작되지 않았을 때만
-  if (fgState.visible && pointInFg(e.clientX, e.clientY)) return;
-  if (ptrs.size > 1) return;
-  panning = true;
-  panStartX = e.clientX; panStartY = e.clientY;
-  startScrollX = container.scrollLeft; startScrollY = container.scrollTop;
-});
-container.addEventListener('pointermove', (e)=>{
-  if (!panning) return;
+},{passive:false});
+fg.addEventListener('wheel',e=>{
+  if(!e.ctrlKey) return;
   e.preventDefault();
-  const dx = e.clientX - panStartX;
-  const dy = e.clientY - panStartY;
-  container.scrollLeft = startScrollX - dx;
-  container.scrollTop  = startScrollY - dy;
-}, {passive:false});
-['pointerup','pointercancel','pointerleave'].forEach(t=>{
-  container.addEventListener(t, ()=>{ panning=false; });
-});
+  resizeForegroundByFactor(e.deltaY>0?1/STEP:STEP,screenToLogical(e.clientX,e.clientY));
+},{passive:false});
 
-/* 단축키: Ctrl + (+/-/0) → 전체 확대/축소/리셋 */
-window.addEventListener('keydown', (e)=>{
-  if (e.ctrlKey && (e.key==='+' || e.key==='=')){ e.preventDefault(); applyStageScale(scale*STEP, null); }
-  else if (e.ctrlKey && (e.key==='-' || e.key==='_')){ e.preventDefault(); applyStageScale(scale/STEP, null); }
-  else if (e.ctrlKey && e.key==='0'){ e.preventDefault(); applyStageScale(1, null); container.scrollTo({left:0, top:0, behavior:'instant'}); }
-});
+/* === 파일 로드 === */
+btnBg.onclick=()=>inputBg.click();
+btnFg.onclick=()=>inputFg.click();
+inputBg.onchange=e=>{
+  const f=e.target.files[0]; if(!f) return;
+  bg.src=URL.createObjectURL(f);
+  bg.onload=()=>{ computeBaseSize(); applyStageSize(); };
+};
+inputFg.onchange=e=>{
+  const f=e.target.files[0]; if(!f) return;
+  fg.src=URL.createObjectURL(f);
+  fg.onload=()=>{
+    fgState.w=150; fgState.h=150;
+    fgState.x=(baseW-150)/2; fgState.y=(baseH-150)/2;
+    fgState.visible=true; syncFgVisual();
+  };
+};
 
-/* ====== 초기화 ====== */
-function restoreZoom(){
-  const s = parseFloat(localStorage.getItem('zoom-scale')||'1');
-  scale = (!isNaN(s)&&s>0)? s : 1;
-}
-window.addEventListener('load', ()=>{
-  restoreZoom();
-  loadImage('bg', bg);
-  loadImage('fg', fg);
-  computeBaseSize();
-  applyStageSize();
-  loadFg();
-  applyStageScale(scale, null);
+/* === 초기화 === */
+window.addEventListener('load',()=>{
+  computeBaseSize(); applyStageSize();
 });
-window.addEventListener('resize', ()=>{
-  const cur = scale;
-  computeBaseSize();
-  applyStageSize();
-  applyStageScale(cur, null);
+window.addEventListener('resize',()=>{
+  computeBaseSize(); applyStageSize();
 });
 </script>
 </body>
