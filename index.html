@@ -5,55 +5,23 @@
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>whereIsMyCar (웹버전)</title>
 <style>
-  body, html {
-    margin:0; padding:0; height:100vh; overflow:hidden;
-    display:flex; flex-direction: column;
-    font-family: Arial, sans-serif;
-  }
-  #buttons {
-    padding: 10px; background: #333; display: flex; gap: 10px;
-  }
-  button {
-    flex: 1; padding: 10px; color: #fff; background: #007bff;
-    border: none; border-radius: 4px; font-size: 16px;
-  }
-  button:hover { background: #0056b3; }
-
-  /* 확대 후 스크롤 영역 */
-  #container {
-    position: relative; flex-grow: 1; background: #ccc;
-    overflow: auto;
-    /* 핀치/패닝/드래그를 직접 처리하기 위해 기본 제스처 비활성화 */
-    touch-action: none;
-  }
-
-  /* 배경+전경 캔버스(실제 픽셀 크기를 scale에 맞춰 변경) */
-  #stage {
-    position: relative;
-    width: 100%; height: 100%;
-  }
-
-  #background {
-    position: absolute; inset: 0; width: 100%; height: 100%;
-    object-fit: contain; user-select: none; pointer-events: none;
-  }
-
-  #foreground {
-    position: absolute; width: 150px; height: 150px;
-    cursor: grab; user-select: none; display: none; touch-action: none;
-  }
-
-  #fg-resize-handle {
-    position: absolute; width: 15px; height: 15px;
-    background: rgba(0,0,0,.5); right: 0; bottom: 0;
-    cursor: se-resize; display: none;
-  }
-
-  #zoomHud {
-    position: fixed; right: 10px; bottom: 10px;
-    background: rgba(0,0,0,.55); color: #fff; padding: 6px 10px;
-    border-radius: 6px; font-size: 13px; z-index: 10; pointer-events: none;
-  }
+  body, html { margin:0; padding:0; height:100vh; overflow:hidden;
+    display:flex; flex-direction: column; font-family: Arial, sans-serif;}
+  #buttons { padding: 10px; background: #333; display: flex; gap: 10px;}
+  button { flex:1; padding:10px; color:#fff; background:#007bff; border:none;
+    border-radius:4px; font-size:16px;}
+  button:hover { background:#0056b3;}
+  #container { position:relative; flex-grow:1; background:#ccc;
+    overflow:auto; touch-action:none;}
+  #stage { position:relative; width:100%; height:100%; }
+  #background { position:absolute; inset:0; width:100%; height:100%;
+    object-fit:contain; user-select:none; pointer-events:none;}
+  #foreground { position:absolute; width:150px; height:150px; cursor:grab;
+    user-select:none; display:none; touch-action:none;}
+  #fg-resize-handle { position:absolute; width:15px; height:15px;
+    background:rgba(0,0,0,.5); right:0; bottom:0; cursor:se-resize; display:none;}
+  #zoomHud { position:fixed; right:10px; bottom:10px; background:rgba(0,0,0,.55);
+    color:#fff; padding:6px 10px; border-radius:6px; font-size:13px; z-index:10;}
 </style>
 </head>
 <body>
@@ -78,288 +46,213 @@
 
 <script>
 /* ===== 요소 ===== */
-const container = document.getElementById('container');
-const stage = document.getElementById('stage');
-const bg = document.getElementById('background');
-const fg = document.getElementById('foreground');
-const fgHandle = document.getElementById('fg-resize-handle');
-const zoomHud = document.getElementById('zoomHud');
-const btnBg = document.getElementById('btnBg');
-const btnFg = document.getElementById('btnFg');
-const inputBg = document.getElementById('inputBg');
-const inputFg = document.getElementById('inputFg');
+const container=document.getElementById('container');
+const stage=document.getElementById('stage');
+const bg=document.getElementById('background');
+const fg=document.getElementById('foreground');
+const fgHandle=document.getElementById('fg-resize-handle');
+const zoomHud=document.getElementById('zoomHud');
+const btnBg=document.getElementById('btnBg');
+const btnFg=document.getElementById('btnFg');
+const inputBg=document.getElementById('inputBg');
+const inputFg=document.getElementById('inputFg');
 
 /* ===== 상태 ===== */
-let baseW = 0, baseH = 0;           // 논리 크기(스케일 1 기준)
-let scale = 1;                       // 배경+전경 공통 배율
-const STEP = 1.1, MIN_SCALE = 0.25, MAX_SCALE = 8;
-const clamp = (v,a,b)=>Math.min(Math.max(v,a),b);
+let baseW=0, baseH=0;
+let scale=1;
+const STEP=1.1, MIN_SCALE=0.25, MAX_SCALE=8;
+const clamp=(v,a,b)=>Math.min(Math.max(v,a),b);
+const fgState={x:0,y:0,w:150,h:150,visible:false};
 
-const fgState = { x:0, y:0, w:150, h:150, visible:false };
+/* ===== 저장/복원 ===== */
+function saveImageToStorage(key,img){
+  if(!img.src) return;
+  // dataURL로 저장
+  const c=document.createElement('canvas');
+  c.width=img.naturalWidth; c.height=img.naturalHeight;
+  const ctx=c.getContext('2d'); ctx.drawImage(img,0,0);
+  localStorage.setItem(key,c.toDataURL('image/png'));
+}
+function restoreImageFromStorage(key,img,cb){
+  const data=localStorage.getItem(key);
+  if(data){ img.src=data; img.onload=()=>cb&&cb(); }
+}
+function saveState(){
+  localStorage.setItem('scale',scale);
+  localStorage.setItem('fgState',JSON.stringify(fgState));
+  localStorage.setItem('scrollX',container.scrollLeft);
+  localStorage.setItem('scrollY',container.scrollTop);
+  // 이미지 저장
+  saveImageToStorage('bgImage',bg);
+  if(fgState.visible) saveImageToStorage('fgImage',fg);
+}
+function restoreState(){
+  const savedScale=parseFloat(localStorage.getItem('scale'));
+  if(savedScale) scale=savedScale;
+  const savedFg=localStorage.getItem('fgState');
+  if(savedFg){ Object.assign(fgState,JSON.parse(savedFg)); }
+  const sx=parseInt(localStorage.getItem('scrollX')||'0');
+  const sy=parseInt(localStorage.getItem('scrollY')||'0');
+  setTimeout(()=>{ container.scrollLeft=sx; container.scrollTop=sy; },50);
 
-/* 핀치/패닝/드래그용 포인터 상태 */
-const pointers = new Map();          // pointerId -> {x,y}
-let lastPinchDist = null;
-let draggingFg = false, dragDX=0, dragDY=0;  // 전경 드래그(논리 오프셋)
-let panning = false, panStartX=0, panStartY=0, panScrollX=0, panScrollY=0;
-let resizing = false;
+  restoreImageFromStorage('bgImage',bg,()=>{ computeBaseSize(); applyStageSize(); });
+  restoreImageFromStorage('fgImage',fg,()=>{ if(fgState.visible) syncFgVisual(); });
+}
 
 /* ===== 유틸 ===== */
 function computeBaseSize(){
-  const cw = container.clientWidth, ch = container.clientHeight;
-  if (bg.naturalWidth && bg.naturalHeight){
-    const s = Math.min(cw/bg.naturalWidth, ch/bg.naturalHeight);
-    baseW = Math.max(1, Math.round(bg.naturalWidth * s));
-    baseH = Math.max(1, Math.round(bg.naturalHeight * s));
-  } else {
-    baseW = cw; baseH = ch;
-  }
+  const cw=container.clientWidth,ch=container.clientHeight;
+  if(bg.naturalWidth&&bg.naturalHeight){
+    const s=Math.min(cw/bg.naturalWidth,ch/bg.naturalHeight);
+    baseW=bg.naturalWidth*s; baseH=bg.naturalHeight*s;
+  } else { baseW=cw;baseH=ch; }
 }
-function applyStageSize(){
-  stage.style.width  = (baseW * scale) + 'px';
-  stage.style.height = (baseH * scale) + 'px';
-  syncFgVisual();
-}
+function applyStageSize(){ stage.style.width=(baseW*scale)+'px';
+  stage.style.height=(baseH*scale)+'px'; syncFgVisual(); }
 function syncFgVisual(){
-  if (!fgState.visible) return;
-  fg.style.display = 'block';
-  fgHandle.style.display = 'block';
-  fg.style.left   = (fgState.x * scale) + 'px';
-  fg.style.top    = (fgState.y * scale) + 'px';
-  fg.style.width  = (fgState.w * scale) + 'px';
-  fg.style.height = (fgState.h * scale) + 'px';
+  if(!fgState.visible) return;
+  fg.style.display='block'; fgHandle.style.display='block';
+  fg.style.left=(fgState.x*scale)+'px'; fg.style.top=(fgState.y*scale)+'px';
+  fg.style.width=(fgState.w*scale)+'px'; fg.style.height=(fgState.h*scale)+'px';
 }
-function screenToLogical(clientX, clientY){
-  const rect = container.getBoundingClientRect();
-  return {
-    lx: (container.scrollLeft + (clientX - rect.left)) / scale,
-    ly: (container.scrollTop  + (clientY - rect.top )) / scale
-  };
+function screenToLogical(x,y){
+  const r=container.getBoundingClientRect();
+  return {lx:(container.scrollLeft+(x-r.left))/scale,
+          ly:(container.scrollTop+(y-r.top))/scale};
 }
-function pointInFg(x, y){
-  const r = fg.getBoundingClientRect();
-  return (x >= r.left && x <= r.right && y >= r.top && y <= r.bottom);
+function pointInFg(x,y){
+  const r=fg.getBoundingClientRect();
+  return x>=r.left && x<=r.right && y>=r.top && y<=r.bottom;
 }
 
-/* ===== 배경(전체) 확대/축소 ===== */
-function applyStageScale(next, anchor /* {clientX, clientY} or null */){
-  next = clamp(next, MIN_SCALE, MAX_SCALE);
-  const prev = scale;
-
-  if (anchor){
-    const rect = container.getBoundingClientRect();
-    const sx = container.scrollLeft + (anchor.clientX - rect.left);
-    const sy = container.scrollTop  + (anchor.clientY - rect.top);
-
-    scale = next;
-    applyStageSize();
-
-    const ratio = scale / prev;
-    container.scrollLeft = sx * ratio - (anchor.clientX - rect.left);
-    container.scrollTop  = sy * ratio - (anchor.clientY - rect.top);
-  } else {
-    scale = next;
-    applyStageSize();
-  }
-  zoomHud.textContent = Math.round(scale*100) + '%';
+/* ===== 확대 ===== */
+function applyStageScale(next,anchor){
+  next=clamp(next,MIN_SCALE,MAX_SCALE);
+  const prev=scale;
+  if(anchor){
+    const r=container.getBoundingClientRect();
+    const sx=container.scrollLeft+(anchor.clientX-r.left);
+    const sy=container.scrollTop +(anchor.clientY-r.top);
+    scale=next; applyStageSize();
+    const ratio=scale/prev;
+    container.scrollLeft=sx*ratio-(anchor.clientX-r.left);
+    container.scrollTop =sy*ratio-(anchor.clientY-r.top);
+  } else { scale=next; applyStageSize(); }
+  zoomHud.textContent=Math.round(scale*100)+'%';
+  saveState();
+}
+function resizeForegroundByFactor(f,anchor){
+  if(!fgState.visible) return;
+  let newW=clamp(fgState.w*f,20,baseW);
+  let newH=clamp(fgState.h*f,20,baseH);
+  const ax=clamp(anchor.lx,fgState.x,fgState.x+fgState.w);
+  const ay=clamp(anchor.ly,fgState.y,fgState.y+fgState.h);
+  const relX=(ax-fgState.x)/fgState.w, relY=(ay-fgState.y)/fgState.h;
+  let newX=ax-relX*newW, newY=ay-relY*newH;
+  newX=clamp(newX,0,baseW-newW); newY=clamp(newY,0,baseH-newH);
+  fgState.x=newX; fgState.y=newY; fgState.w=newW; fgState.h=newH;
+  syncFgVisual(); saveState();
 }
 
-/* ===== 전경만 확대/축소 ===== */
-function resizeForegroundByFactor(factor, logicalAnchor){
-  if (!fgState.visible) return;
-
-  let newW = clamp(fgState.w * factor, 20, baseW);
-  let newH = clamp(fgState.h * factor, 20, baseH);
-
-  // 앵커 유지
-  const ax = clamp(logicalAnchor.lx, fgState.x, fgState.x + fgState.w);
-  const ay = clamp(logicalAnchor.ly, fgState.y, fgState.y + fgState.h);
-  const relX = (ax - fgState.x) / fgState.w;
-  const relY = (ay - fgState.y) / fgState.h;
-
-  let newX = ax - relX * newW;
-  let newY = ay - relY * newH;
-
-  newX = clamp(newX, 0, Math.max(0, baseW - newW));
-  newY = clamp(newY, 0, Math.max(0, baseH - newH));
-
-  fgState.x = newX; fgState.y = newY; fgState.w = newW; fgState.h = newH;
-  syncFgVisual();
+/* ===== 전경 드래그 ===== */
+let dragging=false, dragDX=0, dragDY=0;
+function startFgDrag(x,y){
+  if(!fgState.visible) return;
+  dragging=true; const {lx,ly}=screenToLogical(x,y);
+  dragDX=lx-fgState.x; dragDY=ly-fgState.y;
 }
-
-/* ===== 전경 드래그 (논리 좌표) ===== */
-function startFgDrag(clientX, clientY){
-  if (!fgState.visible) return;
-  draggingFg = true;
-  const { lx, ly } = screenToLogical(clientX, clientY);
-  dragDX = lx - fgState.x;
-  dragDY = ly - fgState.y;
-  fg.style.cursor = 'grabbing';
+function moveFgDrag(x,y){
+  if(!dragging) return;
+  const {lx,ly}=screenToLogical(x,y);
+  let nx=lx-dragDX, ny=ly-dragDY;
+  nx=clamp(nx,0,baseW-fgState.w); ny=clamp(ny,0,baseH-fgState.h);
+  fgState.x=nx; fgState.y=ny; syncFgVisual(); saveState();
 }
-function moveFgDrag(clientX, clientY){
-  if (!draggingFg) return;
-  const { lx, ly } = screenToLogical(clientX, clientY);
-  let nx = lx - dragDX, ny = ly - dragDY;
-  nx = clamp(nx, 0, baseW - fgState.w);
-  ny = clamp(ny, 0, baseH - fgState.h);
-  fgState.x = nx; fgState.y = ny;
-  syncFgVisual();
-}
-function stopFgDrag(){ draggingFg = false; fg.style.cursor = 'grab'; }
+function stopFgDrag(){ dragging=false; }
 
-/* ===== 패닝 (한 손가락 드래그, 전경 잡지 않았을 때) ===== */
-function startPan(clientX, clientY){
-  panning = true;
-  panStartX = clientX; panStartY = clientY;
-  panScrollX = container.scrollLeft; panScrollY = container.scrollTop;
-}
-function movePan(clientX, clientY){
-  if (!panning) return;
-  const dx = clientX - panStartX;
-  const dy = clientY - panStartY;
-  container.scrollLeft = panScrollX - dx;
-  container.scrollTop  = panScrollY - dy;
-}
-function stopPan(){ panning = false; }
+/* ===== 패닝 ===== */
+let panning=false, panStartX=0, panStartY=0, panScrollX=0, panScrollY=0;
+function startPan(x,y){ panning=true; panStartX=x; panStartY=y;
+  panScrollX=container.scrollLeft; panScrollY=container.scrollTop;}
+function movePan(x,y){ if(!panning) return;
+  container.scrollLeft=panScrollX-(x-panStartX);
+  container.scrollTop =panScrollY-(y-panStartY);}
+function stopPan(){ panning=false; saveState(); }
 
-/* ===== 전경 핸들 리사이즈 (터치/포인터) ===== */
-function startResize(){ resizing = true; }
-function moveResize(clientX, clientY){
-  if (!resizing) return;
-  const r = fg.getBoundingClientRect();
-  let newW = Math.max(20, (clientX - r.left) / scale);
-  let newH = Math.max(20, (clientY - r.top ) / scale);
-  newW = Math.min(newW, baseW - fgState.x);
-  newH = Math.min(newH, baseH - fgState.y);
-  fgState.w = newW; fgState.h = newH;
-  syncFgVisual();
+/* ===== 전경 리사이즈 ===== */
+let resizing=false;
+function startResize(){ resizing=true; }
+function moveResize(x,y){
+  if(!resizing) return;
+  const r=fg.getBoundingClientRect();
+  let newW=(x-r.left)/scale, newH=(y-r.top)/scale;
+  newW=clamp(newW,20,baseW-fgState.x); newH=clamp(newH,20,baseH-fgState.y);
+  fgState.w=newW; fgState.h=newH; syncFgVisual(); saveState();
 }
-function stopResize(){ resizing = false; }
+function stopResize(){ resizing=false; }
 
-/* ===== 입력: 파일 ===== */
-btnBg.onclick = ()=> inputBg.click();
-btnFg.onclick = ()=> inputFg.click();
-
-inputBg.onchange = (e)=>{
-  const f = e.target.files[0]; if(!f) return;
-  bg.src = URL.createObjectURL(f);
-  bg.onload = ()=>{
-    computeBaseSize();
-    applyStageSize();
+/* ===== 입력 ===== */
+btnBg.onclick=()=>inputBg.click();
+btnFg.onclick=()=>inputFg.click();
+inputBg.onchange=e=>{
+  const f=e.target.files[0]; if(!f) return;
+  bg.src=URL.createObjectURL(f);
+  bg.onload=()=>{ computeBaseSize(); applyStageSize(); saveState(); };
+};
+inputFg.onchange=e=>{
+  const f=e.target.files[0]; if(!f) return;
+  fg.src=URL.createObjectURL(f);
+  fg.onload=()=>{
+    fgState.w=150; fgState.h=150;
+    fgState.x=(baseW-150)/2; fgState.y=(baseH-150)/2;
+    fgState.visible=true; syncFgVisual(); saveState();
   };
 };
 
-inputFg.onchange = (e)=>{
-  const f = e.target.files[0]; if(!f) return;
-  fg.src = URL.createObjectURL(f);
-  fg.onload = ()=>{
-    fgState.w = 150; fgState.h = 150;
-    fgState.x = Math.max(0, (baseW - fgState.w)/2);
-    fgState.y = Math.max(0, (baseH - fgState.h)/2);
-    fgState.visible = true;
-    syncFgVisual();
-  };
-  fg.style.display = 'block';
-  fgHandle.style.display = 'block';
-};
-
-/* ===== 포인터 제스처(모바일 핀치 포함) ===== */
-container.addEventListener('pointerdown', (e)=>{
+/* ===== 포인터/핀치 ===== */
+const ptrs=new Map(); let lastDist=null;
+container.addEventListener('pointerdown',e=>{
   container.setPointerCapture(e.pointerId);
-  pointers.set(e.pointerId, { x:e.clientX, y:e.clientY });
-
-  // 전경 핸들 시작?
-  if (e.target === fgHandle){ startResize(); return; }
-
-  // 두 손가락 이상이면 드래그/패닝 중단 → 핀치 대기
-  if (pointers.size >= 2){ stopFgDrag(); stopPan(); lastPinchDist = null; return; }
-
-  // 한 손가락: 전경 위면 전경 드래그, 아니면 패닝
-  if (fgState.visible && e.target === fg){
-    startFgDrag(e.clientX, e.clientY);
-  } else {
-    startPan(e.clientX, e.clientY);
-  }
+  ptrs.set(e.pointerId,{x:e.clientX,y:e.clientY});
+  if(e.target===fg) startFgDrag(e.clientX,e.clientY);
+  else if(e.target===fgHandle) startResize();
+  else startPan(e.clientX,e.clientY);
 });
-
-container.addEventListener('pointermove', (e)=>{
-  if (!pointers.has(e.pointerId)) return;
-  pointers.set(e.pointerId, { x:e.clientX, y:e.clientY });
-
-  // 두 손가락 핀치
-  if (pointers.size === 2){
-    e.preventDefault();
-    const pts = Array.from(pointers.values());
-    const dx = pts[0].x - pts[1].x;
-    const dy = pts[0].y - pts[1].y;
-    const dist = Math.hypot(dx, dy);
-    const cx = (pts[0].x + pts[1].x)/2;
-    const cy = (pts[0].y + pts[1].y)/2;
-
-    if (lastPinchDist != null){
-      const ratio = dist / lastPinchDist;
-      // 두 손가락 모두 전경 내부?
-      const bothOnFg = fgState.visible && pts.every(p => pointInFg(p.x, p.y));
-      if (bothOnFg){
-        resizeForegroundByFactor(ratio, screenToLogical(cx, cy));
-      } else {
-        applyStageScale(scale * ratio, { clientX: cx, clientY: cy });
-      }
+container.addEventListener('pointermove',e=>{
+  if(!ptrs.has(e.pointerId)) return;
+  ptrs.set(e.pointerId,{x:e.clientX,y:e.clientY});
+  if(ptrs.size===2){
+    const p=[...ptrs.values()];
+    const dx=p[0].x-p[1].x, dy=p[0].y-p[1].y;
+    const dist=Math.hypot(dx,dy);
+    const cx=(p[0].x+p[1].x)/2, cy=(p[0].y+p[1].y)/2;
+    if(lastDist){
+      const ratio=dist/lastDist;
+      const bothOnFg=p.every(pt=>pointInFg(pt.x,pt.y));
+      if(bothOnFg) resizeForegroundByFactor(ratio,screenToLogical(cx,cy));
+      else applyStageScale(scale*ratio,{clientX:cx,clientY:cy});
     }
-    lastPinchDist = dist;
-    return;
+    lastDist=dist; return;
   }
-
-  // 한 손가락: 전경 드래그 또는 패닝
-  if (draggingFg){
-    e.preventDefault();
-    moveFgDrag(e.clientX, e.clientY);
-  } else if (panning){
-    e.preventDefault();
-    movePan(e.clientX, e.clientY);
-  }
-
-  // 전경 핸들 리사이즈
-  if (resizing){
-    e.preventDefault();
-    moveResize(e.clientX, e.clientY);
-  }
-}, { passive:false });
-
-['pointerup','pointercancel','pointerleave'].forEach(type=>{
-  container.addEventListener(type, (e)=>{
-    pointers.delete(e.pointerId);
-    if (pointers.size < 2) lastPinchDist = null;
-    stopResize();
-
-    // 남은 포인터 없으면 드래그/패닝 종료
-    if (pointers.size === 0){ stopFgDrag(); stopPan(); }
+  if(dragging) moveFgDrag(e.clientX,e.clientY);
+  else if(panning) movePan(e.clientX,e.clientY);
+  else if(resizing) moveResize(e.clientX,e.clientY);
+},{passive:false});
+['pointerup','pointercancel','pointerleave'].forEach(t=>{
+  container.addEventListener(t,e=>{
+    ptrs.delete(e.pointerId); if(ptrs.size<2) lastDist=null;
+    stopFgDrag(); stopPan(); stopResize();
   });
 });
 
-/* ===== 마우스 휠(데스크톱용, 모바일은 무시) ===== */
-container.addEventListener('wheel', (e)=>{
-  if (!e.ctrlKey) return;   // Ctrl+휠일 때만 확대
-  e.preventDefault();
-  const next = scale * (e.deltaY > 0 ? 1/STEP : STEP);
-  // 전경 위 Ctrl+휠이면 전경만, 아니면 전체
-  if (fgState.visible && e.target === fg){
-    resizeForegroundByFactor(e.deltaY>0 ? 1/STEP : STEP, screenToLogical(e.clientX, e.clientY));
-  } else {
-    applyStageScale(next, { clientX:e.clientX, clientY:e.clientY });
-  }
-}, { passive:false });
-
 /* ===== 초기화 ===== */
-window.addEventListener('load', ()=>{
-  computeBaseSize();
-  applyStageSize();
+window.addEventListener('load',()=>{
+  computeBaseSize(); applyStageSize();
+  restoreState();
 });
-window.addEventListener('resize', ()=>{
-  const cur = scale;
-  computeBaseSize();
-  applyStageSize();
-  applyStageScale(cur, null);
+window.addEventListener('resize',()=>{
+  computeBaseSize(); applyStageSize();
+  applyStageScale(scale,null);
 });
 </script>
 </body>
