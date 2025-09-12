@@ -7,10 +7,15 @@
 <style>
   body, html { margin:0; padding:0; height:100vh; overflow:hidden;
     display:flex; flex-direction: column; font-family: Arial, sans-serif;}
-  #buttons { padding: 10px; background: #333; display: flex; gap: 10px;}
-  button { flex:1; padding:10px; color:#fff; background:#007bff; border:none;
-    border-radius:4px; font-size:16px;}
+  /* 상단 바: 오른쪽 정렬을 위해 버튼에 auto margin 사용 */
+  #buttons { padding: 10px; background: #333; display: flex; gap: 10px; align-items:center;}
+  button { padding:10px 12px; color:#fff; background:#007bff; border:none;
+    border-radius:4px; font-size:16px; cursor:pointer; }
   button:hover { background:#0056b3;}
+  /* 오른쪽 끝으로 밀기 */
+  #btnFull { margin-left: auto; background:#28a745; }
+  #btnFull:hover { background:#1e7e34; }
+
   #container { position:relative; flex-grow:1; background:#ccc;
     overflow:auto; touch-action:none;}
   #stage { position:relative; width:100%; height:100%; }
@@ -25,12 +30,12 @@
 </style>
 </head>
 <body>
-
 <div id="buttons">
-  <button id="btnBg">배경사진등록및변경</button>
-  <button id="btnFg">전경사진등록및변경</button>
+  <button id="btnBg">배경사진등록</button>
+  <button id="btnFg">전경사진등록</button>
+  <!-- 추가: 전체화면(100%) 버튼 -->
+  <button id="btnFull">전체화면</button>
 </div>
-
 <div id="container">
   <div id="stage">
     <img id="background" src="" alt="배경이미지" />
@@ -38,12 +43,9 @@
     <div id="fg-resize-handle"></div>
   </div>
 </div>
-
 <div id="zoomHud">100%</div>
-
 <input type="file" id="inputBg" accept="image/*" style="display:none;" />
 <input type="file" id="inputFg" accept="image/*" style="display:none;" />
-
 <script>
 /* ===== 요소 ===== */
 const container=document.getElementById('container');
@@ -54,16 +56,15 @@ const fgHandle=document.getElementById('fg-resize-handle');
 const zoomHud=document.getElementById('zoomHud');
 const btnBg=document.getElementById('btnBg');
 const btnFg=document.getElementById('btnFg');
+const btnFull=document.getElementById('btnFull'); // 추가
 const inputBg=document.getElementById('inputBg');
 const inputFg=document.getElementById('inputFg');
-
 /* ===== 상태 ===== */
 let baseW=0, baseH=0;
 let scale=1;
 const STEP=1.1, MIN_SCALE=0.25, MAX_SCALE=8;
 const clamp=(v,a,b)=>Math.min(Math.max(v,a),b);
 const fgState={x:0,y:0,w:150,h:150,visible:false};
-
 /* ===== 저장/복원 ===== */
 function saveImageToStorage(key,img){
   if(!img.src) return;
@@ -94,11 +95,9 @@ function restoreState(){
   const sx=parseInt(localStorage.getItem('scrollX')||'0');
   const sy=parseInt(localStorage.getItem('scrollY')||'0');
   setTimeout(()=>{ container.scrollLeft=sx; container.scrollTop=sy; },50);
-
   restoreImageFromStorage('bgImage',bg,()=>{ computeBaseSize(); applyStageSize(); });
   restoreImageFromStorage('fgImage',fg,()=>{ if(fgState.visible) syncFgVisual(); });
 }
-
 /* ===== 유틸 ===== */
 function computeBaseSize(){
   const cw=container.clientWidth,ch=container.clientHeight;
@@ -124,7 +123,6 @@ function pointInFg(x,y){
   const r=fg.getBoundingClientRect();
   return x>=r.left && x<=r.right && y>=r.top && y<=r.bottom;
 }
-
 /* ===== 확대 ===== */
 function applyStageScale(next,anchor){
   next=clamp(next,MIN_SCALE,MAX_SCALE);
@@ -153,7 +151,6 @@ function resizeForegroundByFactor(f,anchor){
   fgState.x=newX; fgState.y=newY; fgState.w=newW; fgState.h=newH;
   syncFgVisual(); saveState();
 }
-
 /* ===== 전경 드래그 ===== */
 let dragging=false, dragDX=0, dragDY=0;
 function startFgDrag(x,y){
@@ -169,7 +166,6 @@ function moveFgDrag(x,y){
   fgState.x=nx; fgState.y=ny; syncFgVisual(); saveState();
 }
 function stopFgDrag(){ dragging=false; }
-
 /* ===== 패닝 ===== */
 let panning=false, panStartX=0, panStartY=0, panScrollX=0, panScrollY=0;
 function startPan(x,y){ panning=true; panStartX=x; panStartY=y;
@@ -178,7 +174,6 @@ function movePan(x,y){ if(!panning) return;
   container.scrollLeft=panScrollX-(x-panStartX);
   container.scrollTop =panScrollY-(y-panStartY);}
 function stopPan(){ panning=false; saveState(); }
-
 /* ===== 전경 리사이즈 ===== */
 let resizing=false;
 function startResize(){ resizing=true; }
@@ -190,10 +185,21 @@ function moveResize(x,y){
   fgState.w=newW; fgState.h=newH; syncFgVisual(); saveState();
 }
 function stopResize(){ resizing=false; }
-
 /* ===== 입력 ===== */
 btnBg.onclick=()=>inputBg.click();
 btnFg.onclick=()=>inputFg.click();
+/* 추가: 전체화면(= 100%) 버튼 로직 */
+btnFull.onclick=()=>{
+  // 컨테이너 기준으로 이미지가 꽉 차도록 계산된 baseW/baseH를 재계산 후
+  // 배율을 정확히 1로 맞추고 스크롤 초기화
+  computeBaseSize();
+  applyStageScale(1, null);
+  container.scrollLeft = 0;
+  container.scrollTop = 0;
+  zoomHud.textContent = '100%';
+  saveState();
+};
+
 inputBg.onchange=e=>{
   const f=e.target.files[0]; if(!f) return;
   bg.src=URL.createObjectURL(f);
@@ -208,7 +214,6 @@ inputFg.onchange=e=>{
     fgState.visible=true; syncFgVisual(); saveState();
   };
 };
-
 /* ===== 포인터/핀치 ===== */
 const ptrs=new Map(); let lastDist=null;
 container.addEventListener('pointerdown',e=>{
@@ -244,7 +249,6 @@ container.addEventListener('pointermove',e=>{
     stopFgDrag(); stopPan(); stopResize();
   });
 });
-
 /* ===== 초기화 ===== */
 window.addEventListener('load',()=>{
   computeBaseSize(); applyStageSize();
